@@ -5,13 +5,23 @@ import re
 from datetime import datetime
 from io import BytesIO
 
-# --- 1. GIAO DIỆN ---
-st.set_page_config(page_title="Team G Detailed Analysis", layout="wide")
+# --- 1. GIAO DIỆN VINH DANH SANG TRỌNG ---
+st.set_page_config(page_title="Team G - Hall of Fame", layout="wide")
 st.markdown("""
     <style>
     .main { background-color: #0E1117; color: #FFFFFF; }
-    [data-testid="stMetricValue"] { color: #00D4FF !important; font-weight: 900 !important; }
-    [data-testid="stChart"] { height: 380px !important; }
+    /* Style cho các ô vinh danh */
+    .award-card {
+        background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
+        border: 1px solid #38bdf8;
+        border-radius: 15px;
+        padding: 20px;
+        text-align: center;
+        box-shadow: 0 4px 15px rgba(0, 212, 255, 0.2);
+    }
+    .award-rank { color: #ffd700; font-size: 1.2rem; font-weight: bold; }
+    .award-name { color: #ffffff; font-size: 1.5rem; font-weight: bold; margin: 10px 0; }
+    .award-value { color: #00D4FF; font-size: 1.3rem; font-family: 'Courier New', monospace; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -32,8 +42,8 @@ def smart_load(file):
         return pd.read_excel(file, skiprows=header_row) if file.name.endswith(('.xlsx', '.xls')) else pd.read_csv(file, sep=None, engine='python', skiprows=header_row, encoding='utf-8', errors='ignore')
     except: return None
 
-# --- 3. ENGINE PHÂN TÍCH TEAM G ---
-def process_team_g_final(file):
+# --- 3. ENGINE PHÂN TÍCH & VINH DANH ---
+def process_honors(file):
     df = smart_load(file)
     if df is None: return
 
@@ -45,70 +55,76 @@ def process_team_g_final(file):
             if all(k in c for k in keys): return cols[i]
         return None
 
-    m_c, e_c, v_c, w_c, id_c, src_c, team_c = get_c(['TARGET', 'PREMIUM']), get_c(['THÁNG', 'NHẬN', 'FILE']), get_c(['THÁNG', 'NHẬN', 'LEAD']), get_c(['NĂM', 'NHẬN', 'LEAD']), get_c(['LEAD', 'ID']), get_c(['SOURCE']), get_c(['TEAM'])
+    m_c, team_c, owner_c = get_c(['TARGET', 'PREMIUM']), get_c(['TEAM']), get_c(['OWNER'])
+    e_c, v_c, w_c, id_c, src_c = get_c(['THÁNG', 'NHẬN', 'FILE']), get_c(['THÁNG', 'NHẬN', 'LEAD']), get_c(['NĂM', 'NHẬN', 'LEAD']), get_c(['LEAD', 'ID']), get_c(['SOURCE'])
 
-    # 1. Lọc Team G
-    df = df[df[team_c].astype(str).str.upper().str.contains('G', na=False)].copy()
+    if not all([team_c, owner_c, m_c]):
+        st.error("❌ Thiếu cột Team, Owner hoặc Target Premium.")
+        return
 
-    # 2. Phân loại Nguồn
+    # Lọc Team G
+    df_g = df[df[team_c].astype(str).str.upper().str.contains('G', na=False)].copy()
+    
+    # Làm sạch tiền
+    df_g['REV'] = df_g[m_c].apply(lambda v: float(re.sub(r'[^0-9.]', '', str(v))) if pd.notna(v) and re.sub(r'[^0-9.]', '', str(v)) != '' else 0.0)
+
+    # --- PHẦN 1: VINH DANH TOP 5 ---
+    st.title("🏆 TEAM G - HALL OF FAME 2025")
+    st.subheader("Vinh danh 5 cá nhân xuất sắc nhất năm")
+    
+    leaderboard = df_g.groupby(owner_c)['REV'].sum().sort_values(ascending=False).reset_index()
+    top_5 = leaderboard.head(5)
+
+    cols_award = st.columns(5)
+    icons = ["🥇", "🥈", "🥉", "🏅", "🏅"]
+    
+    for i, (idx, row) in enumerate(top_5.iterrows()):
+        with cols_award[i]:
+            st.markdown(f"""
+                <div class="award-card">
+                    <div class="award-rank">{icons[i]} Hạng {i+1}</div>
+                    <div class="award-name">{row[owner_c]}</div>
+                    <div class="award-value">${row['REV']:,.0f}</div>
+                </div>
+                """, unsafe_allow_html=True)
+
+    # --- PHẦN 2: PHÂN TÍCH CHI TIẾT COHORT (NHƯ CŨ) ---
+    st.markdown("---")
+    st.subheader("📊 Bảng xếp hạng chi tiết toàn Team G")
+    st.dataframe(leaderboard.rename(columns={owner_c: 'Thành viên', 'REV': 'Tổng doanh số ($)'}).style.format({'Tổng doanh số ($)': '{:,.0f}'}), use_container_width=True)
+
+    # Logic xử lý Cohort & Tách nguồn (Funnel/Cold Call) để khớp yêu cầu trước của bạn
     def classify_source(val):
         s = str(val).upper().replace(" ", "").replace(".", "")
         return 'COLD CALL' if 'CC' in s or 'COLDCALL' in s else 'FUNNEL'
-    df['LOẠI_NGUỒN'] = df[src_c].apply(classify_source)
+    df_g['LOẠI_NGUỒN'] = df_g[src_c].apply(classify_source) if src_c else 'N/A'
 
-    # 3. Làm sạch tiền
-    df['REV'] = df[m_c].apply(lambda v: float(re.sub(r'[^0-9.]', '', str(v))) if pd.notna(v) and re.sub(r'[^0-9.]', '', str(v)) != '' else 0.0)
-    
-    # 4. Logic Nhóm Lead (Xử lý riêng cho Cold Call)
     def assign_cohort_v2(row):
-        if row['LOẠI_NGUỒN'] == 'COLD CALL':
-            return "📦 NHÓM COLD CALL"
+        if row['LOẠI_NGUỒN'] == 'COLD CALL': return "📦 NHÓM COLD CALL"
         try:
-            if pd.isna(row[v_c]) or pd.isna(row[w_c]): return "❌ Thiếu ngày nhận Lead"
             y, m = int(float(row[w_c])), int(float(row[v_c]))
             return f"Funnel T{m:02d}/{y}" if y == current_year else f"Funnel Trước {current_year}"
-        except: return "❌ Lỗi định dạng ngày"
+        except: return "❌ Thiếu ngày nhận Lead"
 
-    df['NHÓM_PHÂN_LOẠI'] = df.apply(assign_cohort_v2, axis=1)
-    df['TH_CHOT_NUM'] = df[e_c].apply(lambda v: int(float(v)) if pd.notna(v) and 1 <= int(float(v)) <= 12 else None)
+    df_g['NHÓM_PHÂN_LOẠI'] = df_g.apply(assign_cohort_v2, axis=1)
+    df_g['TH_CHOT_NUM'] = df_g[e_c].apply(lambda v: int(float(v)) if pd.notna(v) and 1 <= int(float(v)) <= 12 else None)
 
-    # --- TẠO MA TRẬN ---
-    def create_mtx(val_col, agg_func):
-        mtx = df.pivot_table(index='NHÓM_PHÂN_LOẠI', columns='TH_CHOT_NUM', values=val_col, aggfunc=agg_func).fillna(0)
-        mtx = mtx.reindex(columns=range(1, 13)).fillna(0)
-        mtx.columns = [f"Tháng {int(c)}" for c in mtx.columns]
-        # Sắp xếp để Cold Call nằm riêng biệt
-        idx = sorted([i for i in mtx.index if "Funnel" in i]) + [i for i in mtx.index if "COLD CALL" in i] + [i for i in mtx.index if "❌" in i]
-        return mtx.reindex(idx)
+    matrix_rev = df_g.pivot_table(index='NHÓM_PHÂN_LOẠI', columns='TH_CHOT_NUM', values='REV', aggfunc='sum').fillna(0)
+    matrix_rev = matrix_rev.reindex(columns=range(1, 13)).fillna(0)
+    matrix_rev.columns = [f"Tháng {int(c)}" for c in matrix_rev.columns]
 
-    matrix_rev = create_mtx('REV', 'sum')
-    matrix_count = create_mtx(id_c, 'nunique')
-
-    # --- HIỂN THỊ ---
-    st.title(f"🚀 Team G Performance: Funnel & Cold Call ({current_year})")
-    
-    # Biểu đồ cột chồng
-    chart_data = df.groupby(['TH_CHOT_NUM', 'LOẠI_NGUỒN'])['REV'].sum().unstack().reindex(range(1, 13)).fillna(0)
-    chart_data.index = [f"Tháng {i:02d}" for i in range(1, 13)]
-    st.bar_chart(chart_data)
-
-    c1, c2, c3 = st.columns(3)
-    c1.metric("💰 TỔNG DOANH SỐ G", f"${df['REV'].sum():,.2f}")
-    c2.metric("🎯 DOANH SỐ FUNNEL", f"${df[df['LOẠI_NGUỒN']=='FUNNEL']['REV'].sum():,.2f}")
-    c3.metric("📞 DOANH SỐ COLD CALL", f"${df[df['LOẠI_NGUỒN']=='COLD CALL']['REV'].sum():,.2f}")
-
-    tab1, tab2 = st.tabs(["💵 Ma trận Doanh số ($)", "🔢 Ma trận Số lượng (Hồ sơ)"])
-    with tab1: st.dataframe(matrix_rev.style.format("${:,.0f}"), use_container_width=True)
-    with tab2: st.dataframe(matrix_count.style.format("{:,.0f}"), use_container_width=True)
+    st.markdown("---")
+    st.subheader("💵 Ma trận doanh số chi tiết theo nguồn")
+    st.dataframe(matrix_rev.style.format("${:,.0f}"), use_container_width=True)
 
     # XUẤT EXCEL
     output = BytesIO()
     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-        matrix_rev.to_excel(writer, sheet_name='Revenue_Detail')
-        matrix_count.to_excel(writer, sheet_name='Count_Detail')
-        df.to_excel(writer, index=False, sheet_name='Clean_Data_TeamG')
-    st.sidebar.download_button("📥 Tải Báo Cáo Team G", output.getvalue(), f"Team_G_Analysis_{current_year}.xlsx")
+        leaderboard.to_excel(writer, sheet_name='Leaderboard_Vinh_Danh', index=False)
+        matrix_rev.to_excel(writer, sheet_name='Revenue_Cohort_TeamG')
+        df_g.to_excel(writer, index=False, sheet_name='Data_Source_TeamG')
+    st.sidebar.download_button("📥 Tải Báo Cáo Vinh Danh & Doanh Số", output.getvalue(), f"Team_G_Vinh_Danh_{current_year}.xlsx")
 
-st.title("🛡️ Strategic Portal - Team G")
-f = st.file_uploader("Nạp file Masterlife", type=['csv', 'xlsx'])
-if f: process_team_g_final(f)
+st.sidebar.title("🛡️ Team G Management")
+f = st.file_uploader("Nạp file Masterlife để vinh danh", type=['csv', 'xlsx'])
+if f: process_honors(f)
