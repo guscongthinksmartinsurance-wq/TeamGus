@@ -46,7 +46,6 @@ def smart_load(file):
 def main():
     st.sidebar.title("🛡️ Team G Portal")
     menu = st.sidebar.radio("Chọn công cụ xem:", ["📊 Phân tích Cohort", "🏆 Vinh danh cá nhân"])
-    
     f = st.sidebar.file_uploader("Nạp file Masterlife", type=['csv', 'xlsx'])
     
     if f:
@@ -67,12 +66,9 @@ def main():
         df = df[df[team_c].astype(str).str.upper().str.contains('G', na=False)].copy()
         df['REV'] = df[m_c].apply(lambda v: float(re.sub(r'[^0-9.]', '', str(v))) if pd.notna(v) and re.sub(r'[^0-9.]', '', str(v)) != '' else 0.0)
         
-        # --- LOGIC PHÂN LOẠI ---
-        def classify_src(v):
-            s = str(v).upper().replace(" ", "").replace(".", "")
-            return 'COLD CALL' if 'CC' in s or 'COLDCALL' in s else 'FUNNEL'
-        df['LOẠI_NGUỒN'] = df[src_c].apply(classify_src)
-
+        # PHÂN LOẠI NGUỒN & COHORT
+        df['LOẠI_NGUỒN'] = df[src_c].apply(lambda v: 'COLD CALL' if any(x in str(v).upper().replace(" ", "") for x in ['CC', 'COLDCALL']) else 'FUNNEL')
+        
         def assign_cohort(row):
             if row['LOẠI_NGUỒN'] == 'COLD CALL': return "📦 NHÓM COLD CALL"
             try:
@@ -83,11 +79,21 @@ def main():
         df['NHÓM_PHÂN_LOẠI'] = df.apply(assign_cohort, axis=1)
         df['TH_CHOT_NUM'] = df[e_c].apply(lambda v: int(float(v)) if pd.notna(v) and 1 <= int(float(v)) <= 12 else None)
 
-        # --- MENU 1: PHÂN TÍCH COHORT ---
+        # --- TÍNH TOÁN TẤT CẢ DỮ LIỆU (ĐỂ KHÔNG BỊ LỖI EXPORT) ---
+        # 1. Ma trận
+        mtx_rev = df.pivot_table(index='NHÓM_PHÂN_LOẠI', columns='TH_CHOT_NUM', values='REV', aggfunc='sum').fillna(0).reindex(columns=range(1, 13)).fillna(0)
+        mtx_rev.columns = [f"Tháng {int(c)}" for c in mtx_rev.columns]
+        
+        mtx_cnt = df.pivot_table(index='NHÓM_PHÂN_LOẠI', columns='TH_CHOT_NUM', values=id_c, aggfunc='nunique').fillna(0).reindex(columns=range(1, 13)).fillna(0)
+        mtx_cnt.columns = [f"Tháng {int(c)}" for c in mtx_cnt.columns]
+
+        # 2. Vinh danh
+        leaderboard = df.groupby(owner_c).agg({'REV': 'sum', id_c: 'nunique'}).sort_values(by='REV', ascending=False).reset_index()
+        leaderboard.columns = ['Thành viên', 'Tổng doanh số ($)', 'Số hợp đồng']
+
+        # --- HIỂN THỊ THEO MENU ---
         if menu == "📊 Phân tích Cohort":
             st.title(f"🚀 Team G Analysis - {current_year}")
-            
-            # Biểu đồ cột chồng
             chart_data = df.groupby(['TH_CHOT_NUM', 'LOẠI_NGUỒN'])['REV'].sum().unstack().reindex(range(1, 13)).fillna(0)
             chart_data.index = [f"Tháng {i:02d}" for i in range(1, 13)]
             st.bar_chart(chart_data)
@@ -97,60 +103,33 @@ def main():
             c2.metric("📋 TỔNG HỢP ĐỒNG", f"{df[id_c].nunique():,}")
             c3.metric("🎯 NGUỒN FUNNEL", f"${df[df['LOẠI_NGUỒN']=='FUNNEL']['REV'].sum():,.2f}")
 
-            tab_money, tab_count = st.tabs(["💵 Ma trận Doanh số ($)", "🔢 Ma trận Số lượng (HĐ)"])
-            
-            with tab_money:
-                mtx_rev = df.pivot_table(index='NHÓM_PHÂN_LOẠI', columns='TH_CHOT_NUM', values='REV', aggfunc='sum').fillna(0)
-                mtx_rev = mtx_rev.reindex(columns=range(1, 13)).fillna(0)
-                mtx_rev.columns = [f"Tháng {int(c)}" for c in mtx_rev.columns]
-                st.dataframe(mtx_rev.style.format("${:,.0f}"), use_container_width=True)
-                
-            with tab_count:
-                mtx_cnt = df.pivot_table(index='NHÓM_PHÂN_LOẠI', columns='TH_CHOT_NUM', values=id_c, aggfunc='nunique').fillna(0)
-                mtx_cnt = mtx_cnt.reindex(columns=range(1, 13)).fillna(0)
-                mtx_cnt.columns = [f"Tháng {int(c)}" for c in mtx_cnt.columns]
-                st.dataframe(mtx_cnt.style.format("{:,.0f}"), use_container_width=True)
+            t_money, t_count = st.tabs(["💵 Ma trận Doanh số ($)", "🔢 Ma trận Số lượng (HĐ)"])
+            with t_money: st.dataframe(mtx_rev.style.format("${:,.0f}"), use_container_width=True)
+            with t_count: st.dataframe(mtx_cnt.style.format("{:,.0f}"), use_container_width=True)
 
-        # --- MENU 2: VINH DANH CÁ NHÂN ---
         else:
             st.title("🏆 TEAM G - HALL OF FAME")
-            leaderboard = df.groupby(owner_c).agg({'REV': 'sum', id_c: 'nunique'}).sort_values(by='REV', ascending=False).reset_index()
-            leaderboard.columns = ['Thành viên', 'Tổng doanh số ($)', 'Số hợp đồng']
-            
             top_5 = leaderboard.head(5)
-            st.subheader(f"Top 5 Chiến thần xuất sắc năm {current_year}")
-            cols_vinhdanh = st.columns(5)
+            cols_vinh = st.columns(5)
             medals = ["🥇 Hạng 1", "🥈 Hạng 2", "🥉 Hạng 3", "🏅 Hạng 4", "🏅 Hạng 5"]
-            
             for i, (idx, row) in enumerate(top_5.iterrows()):
-                with cols_vinhdanh[i]:
-                    st.markdown(f"""
-                        <div class="award-card">
-                            <div style="font-size: 0.9rem; color: #ffd700;">{medals[i]}</div>
-                            <div class="award-name">{row['Thành viên']}</div>
-                            <div class="award-value">${row['Tổng doanh số ($)']:,.0f}</div>
-                            <div style="color: #8B949E; font-size: 0.8rem;">{row['Số hợp đồng']} Hợp đồng</div>
-                        </div>
-                        """, unsafe_allow_html=True)
-            
+                with cols_vinh[i]:
+                    st.markdown(f"""<div class="award-card"><div style="font-size:0.8rem;color:#ffd700;">{medals[i]}</div>
+                        <div class="award-name">{row['Thành viên']}</div><div class="award-value">${row['Tổng doanh số ($)']:,.0f}</div>
+                        <div style="color:#8B949E;font-size:0.8rem;">{row['Số hợp đồng']} Hợp đồng</div></div>""", unsafe_allow_html=True)
             st.markdown("---")
-            st.subheader("📊 Bảng xếp hạng chi tiết")
             st.dataframe(leaderboard.style.format({'Tổng doanh số ($)': '{:,.0f}', 'Số hợp đồng': '{:,.0f}'}), use_container_width=True)
 
-        # --- XUẤT EXCEL ĐA SHEET ---
+        # --- XUẤT EXCEL (LUÔN CÓ ĐỦ DỮ LIỆU) ---
         output = BytesIO()
         with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-            # Sheet 1: Xếp hạng cá nhân
             leaderboard.to_excel(writer, sheet_name='Leaderboard', index=False)
-            # Sheet 2: Ma trận Doanh số
-            df.pivot_table(index='NHÓM_PHÂN_LOẠI', columns='TH_CHOT_NUM', values='REV', aggfunc='sum').to_excel(writer, sheet_name='Cohort_Revenue')
-            # Sheet 3: Ma trận Số lượng
-            df.pivot_table(index='NHÓM_PHÂN_LOẠI', columns='TH_CHOT_NUM', values=id_c, aggfunc='nunique').to_excel(writer, sheet_name='Cohort_Count')
-            # Sheet 4: Dữ liệu thô đã lọc
+            mtx_rev.to_excel(writer, sheet_name='Cohort_Revenue')
+            mtx_cnt.to_excel(writer, sheet_name='Cohort_Count')
             df.to_excel(writer, index=False, sheet_name='Raw_Data_TeamG')
             
         st.sidebar.markdown("---")
-        st.sidebar.download_button("📥 Tải Báo Cáo Tổng Hợp (Tiền & Số lượng)", output.getvalue(), f"Team_G_Full_Report_{current_year}.xlsx")
+        st.sidebar.download_button("📥 Tải Báo Cáo Strategic (.xlsx)", output.getvalue(), f"Team_G_Report_{current_year}.xlsx")
 
 if __name__ == "__main__":
     main()
