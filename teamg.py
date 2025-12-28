@@ -32,8 +32,8 @@ def smart_load(file):
         return pd.read_excel(file, skiprows=header_row) if file.name.endswith(('.xlsx', '.xls')) else pd.read_csv(file, sep=None, engine='python', skiprows=header_row, encoding='utf-8', errors='ignore')
     except: return None
 
-# --- 3. XỬ LÝ DỮ LIỆU TÁCH BIỆT NGUỒN ---
-def process_team_g_detail(file):
+# --- 3. ENGINE PHÂN TÍCH TEAM G ---
+def process_team_g_final(file):
     df = smart_load(file)
     if df is None: return
 
@@ -47,73 +47,68 @@ def process_team_g_detail(file):
 
     m_c, e_c, v_c, w_c, id_c, src_c, team_c = get_c(['TARGET', 'PREMIUM']), get_c(['THÁNG', 'NHẬN', 'FILE']), get_c(['THÁNG', 'NHẬN', 'LEAD']), get_c(['NĂM', 'NHẬN', 'LEAD']), get_c(['LEAD', 'ID']), get_c(['SOURCE']), get_c(['TEAM'])
 
-    # --- LỌC TEAM G & PHÂN LOẠI NGUỒN ---
-    if team_c and src_c:
-        # 1. Chỉ lấy Team G
-        df = df[df[team_c].astype(str).str.upper().str.contains('G', na=False)].copy()
-        
-        # 2. Phân loại Funnel vs Cold Call (Dựa trên cột Source)
-        def classify_source(val):
-            s = str(val).upper().replace(" ", "").replace(".", "")
-            if 'CC' in s or 'COLDCALL' in s:
-                return 'COLD CALL'
-            return 'FUNNEL'
-        
-        df['LOẠI_NGUỒN'] = df[src_c].apply(classify_source)
-    else:
-        st.error("❌ Thiếu cột 'Team' hoặc 'Source'.")
-        return
+    # 1. Lọc Team G
+    df = df[df[team_c].astype(str).str.upper().str.contains('G', na=False)].copy()
 
-    # Làm sạch tiền
+    # 2. Phân loại Nguồn
+    def classify_source(val):
+        s = str(val).upper().replace(" ", "").replace(".", "")
+        return 'COLD CALL' if 'CC' in s or 'COLDCALL' in s else 'FUNNEL'
+    df['LOẠI_NGUỒN'] = df[src_c].apply(classify_source)
+
+    # 3. Làm sạch tiền
     df['REV'] = df[m_c].apply(lambda v: float(re.sub(r'[^0-9.]', '', str(v))) if pd.notna(v) and re.sub(r'[^0-9.]', '', str(v)) != '' else 0.0)
     
-    # Nhóm Lead & Tháng chốt
-    df['NHÓM_LEAD'] = df.apply(lambda r: f"Lead T{int(float(r[v_c])):02d}/{int(float(r[w_c]))}" if pd.notna(r[v_c]) and int(float(r[w_c])) == current_year else f"Trước năm {current_year}", axis=1)
+    # 4. Logic Nhóm Lead (Xử lý riêng cho Cold Call)
+    def assign_cohort_v2(row):
+        if row['LOẠI_NGUỒN'] == 'COLD CALL':
+            return "📦 NHÓM COLD CALL"
+        try:
+            if pd.isna(row[v_c]) or pd.isna(row[w_c]): return "❌ Thiếu ngày nhận Lead"
+            y, m = int(float(row[w_c])), int(float(row[v_c]))
+            return f"Funnel T{m:02d}/{y}" if y == current_year else f"Funnel Trước {current_year}"
+        except: return "❌ Lỗi định dạng ngày"
+
+    df['NHÓM_PHÂN_LOẠI'] = df.apply(assign_cohort_v2, axis=1)
     df['TH_CHOT_NUM'] = df[e_c].apply(lambda v: int(float(v)) if pd.notna(v) and 1 <= int(float(v)) <= 12 else None)
 
-    # --- TẠO MA TRẬN PHÂN CẤP (NGUỒN TRONG NHÓM LEAD) ---
-    def create_detail_matrix(val_col, agg_func):
-        mtx = df.pivot_table(index=['NHÓM_LEAD', 'LOẠI_NGUỒN'], columns='TH_CHOT_NUM', values=val_col, aggfunc=agg_func).fillna(0)
+    # --- TẠO MA TRẬN ---
+    def create_mtx(val_col, agg_func):
+        mtx = df.pivot_table(index='NHÓM_PHÂN_LOẠI', columns='TH_CHOT_NUM', values=val_col, aggfunc=agg_func).fillna(0)
         mtx = mtx.reindex(columns=range(1, 13)).fillna(0)
         mtx.columns = [f"Tháng {int(c)}" for c in mtx.columns]
-        return mtx
+        # Sắp xếp để Cold Call nằm riêng biệt
+        idx = sorted([i for i in mtx.index if "Funnel" in i]) + [i for i in mtx.index if "COLD CALL" in i] + [i for i in mtx.index if "❌" in i]
+        return mtx.reindex(idx)
 
-    matrix_rev = create_detail_matrix('REV', 'sum')
-    matrix_count = create_detail_matrix(id_c, 'nunique')
+    matrix_rev = create_mtx('REV', 'sum')
+    matrix_count = create_mtx(id_c, 'nunique')
 
-    # --- HIỂN THỊ DASHBOARD ---
-    st.title(f"📊 Team G Performance Detail - {current_year}")
-
-    # Biểu đồ cột chồng (Stacked Bar) thể hiện đóng góp Funnel vs Cold Call
-    st.subheader("📈 Tỷ trọng đóng góp Doanh số (Funnel vs Cold Call)")
+    # --- HIỂN THỊ ---
+    st.title(f"🚀 Team G Performance: Funnel & Cold Call ({current_year})")
+    
+    # Biểu đồ cột chồng
     chart_data = df.groupby(['TH_CHOT_NUM', 'LOẠI_NGUỒN'])['REV'].sum().unstack().reindex(range(1, 13)).fillna(0)
     chart_data.index = [f"Tháng {i:02d}" for i in range(1, 13)]
     st.bar_chart(chart_data)
 
     c1, c2, c3 = st.columns(3)
     c1.metric("💰 TỔNG DOANH SỐ G", f"${df['REV'].sum():,.2f}")
-    c2.metric("🎯 FUNNEL CHỐT", f"${df[df['LOẠI_NGUỒN']=='FUNNEL']['REV'].sum():,.2f}")
-    c3.metric("📞 COLD CALL CHỐT", f"${df[df['LOẠI_NGUỒN']=='COLD CALL']['REV'].sum():,.2f}")
+    c2.metric("🎯 DOANH SỐ FUNNEL", f"${df[df['LOẠI_NGUỒN']=='FUNNEL']['REV'].sum():,.2f}")
+    c3.metric("📞 DOANH SỐ COLD CALL", f"${df[df['LOẠI_NGUỒN']=='COLD CALL']['REV'].sum():,.2f}")
 
-    st.markdown("---")
-    t1, t2 = st.tabs(["💵 Chi tiết Doanh số ($)", "🔢 Chi tiết Số lượng (Hồ sơ)"])
-    
-    with t1:
-        st.write("Bảng phân tích doanh số tách bạch Funnel và Cold Call:")
-        st.dataframe(matrix_rev.style.format("${:,.0f}"), use_container_width=True)
-    with t2:
-        st.write("Bảng phân tích số lượng hồ sơ chốt:")
-        st.dataframe(matrix_count.style.format("{:,.0f}"), use_container_width=True)
+    tab1, tab2 = st.tabs(["💵 Ma trận Doanh số ($)", "🔢 Ma trận Số lượng (Hồ sơ)"])
+    with tab1: st.dataframe(matrix_rev.style.format("${:,.0f}"), use_container_width=True)
+    with tab2: st.dataframe(matrix_count.style.format("{:,.0f}"), use_container_width=True)
 
     # XUẤT EXCEL
     output = BytesIO()
     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
         matrix_rev.to_excel(writer, sheet_name='Revenue_Detail')
         matrix_count.to_excel(writer, sheet_name='Count_Detail')
-        df.to_excel(writer, index=False, sheet_name='Raw_Data_TeamG')
-
-    st.sidebar.download_button("📥 Tải Báo Cáo Chi Tiết Team G", output.getvalue(), f"Team_G_Detail_{current_year}.xlsx")
+        df.to_excel(writer, index=False, sheet_name='Clean_Data_TeamG')
+    st.sidebar.download_button("📥 Tải Báo Cáo Team G", output.getvalue(), f"Team_G_Analysis_{current_year}.xlsx")
 
 st.title("🛡️ Strategic Portal - Team G")
 f = st.file_uploader("Nạp file Masterlife", type=['csv', 'xlsx'])
-if f: process_team_g_detail(f)
+if f: process_team_g_final(f)
