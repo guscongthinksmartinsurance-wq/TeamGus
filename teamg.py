@@ -21,7 +21,7 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# --- 2. HÀM TRỢ GIÚP (CÔNG CỤ 1, 2, 4) ---
+# --- 2. HÀM TRỢ GIÚP ---
 def smart_load(file):
     if file is None: return None
     try:
@@ -55,63 +55,54 @@ def main():
     menu = st.sidebar.radio("Chọn công cụ:", ["📊 Phân tích Cohort", "🏆 Vinh danh cá nhân", "📈 So sánh dòng tiền", "📞 Phân tích Call Log"])
     curr_y = datetime.now().year
 
-    # 🔥 SỬA LỖI CÔNG CỤ 3: CALL LOG (ĐỘNG CƠ SIÊU CẤP)
+    # 🔥 SỬA DỨT ĐIỂM CÔNG CỤ 3: CALL LOG
     if menu == "📞 Phân tích Call Log":
-        f_c = st.sidebar.file_uploader("Nạp file Call Log (Tối ưu file 90MB+)", type=['csv'], key='f_call_final')
+        f_c = st.sidebar.file_uploader("Nạp file Call Log (90MB+)", type=['csv'], key='f_call_v3')
         if f_c:
-            st.title("📞 Call Performance Analytics (v2.1 Stable)")
+            st.title("📞 Call Performance Analytics (Engine V3 - Ultra)")
             counts = {}
-            progress = st.progress(0)
-            
             try:
-                # Dùng C Engine để đạt tốc độ tối đa, chỉ lấy cột Extension để tiết kiệm RAM
-                # Thử đọc header trước để tìm cột Extension
-                header = pd.read_csv(f_c, nrows=0, sep=None, engine='python')
-                ext_col = [c for c in header.columns if 'Extension' in c]
+                # Bước 1: Tìm cột Extension cực nhanh
+                header = pd.read_csv(f_c, nrows=5, sep=None, engine='python', encoding='utf-8', errors='ignore')
+                ext_col = [c for c in header.columns if 'Extension' in str(c)]
                 
-                if ext_col:
-                    f_c.seek(0) # Quay lại đầu file
-                    # Chế độ Chunking với bộ đọc tối giản nhất có thể
-                    reader = pd.read_csv(f_c, usecols=[ext_col[0]], chunksize=100000, 
-                                         engine='c', encoding='utf-8', on_bad_lines='skip', low_memory=False)
-                    
-                    for i, chunk in enumerate(reader):
-                        # Trích xuất tên từ Extension: "123 - Nguyen Van A" -> "Nguyen Van A"
-                        chunk['Staff'] = chunk[ext_col[0]].astype(str).apply(lambda x: x.split('-')[-1].strip() if '-' in x else x)
-                        c_counts = chunk['Staff'].value_counts().to_dict()
-                        for s, c in c_counts.items():
-                            counts[s] = counts.get(s, 0) + c
-                        progress.progress(min((i + 1) * 20 / 100, 1.0))
-                
-                if counts:
-                    stat = pd.DataFrame(list(counts.items()), columns=['Nhân viên', 'Tổng cuộc gọi']).sort_values('Tổng cuộc gọi', ascending=False)
-                    
-                    # Bục vinh danh (4-2-1-3-5)
-                    st.subheader("🏆 Top 5 Chiến thần Telesale")
-                    v_cols = st.columns(5)
-                    top_5 = stat.head(5)
-                    d_map = [{'i':3,'t':"🏅 Hạng 4"}, {'i':1,'t':"🥈 Hạng 2"}, {'i':0,'t':"👑 VÔ ĐỊCH"}, {'i':2,'t':"🥉 Hạng 3"}, {'i':4,'t':"🏅 Hạng 5"}]
-                    for i, item in enumerate(d_map):
-                        if item['i'] < len(top_5):
-                            row = top_5.iloc[item['i']]
-                            with v_cols[i]:
-                                st.markdown(f"<div class='podium-card rank-call-glow'><div style='color:#00D4FF;'>{item['t']}</div><span class='staff-name-highlight'>{row['Nhân viên']}</span><div class='rev-val'>{row['Tổng cuộc gọi']:,}</div></div>", unsafe_allow_html=True)
-                    
-                    stat.index = np.arange(1, len(stat)+1)
-                    st.markdown("---")
-                    st.dataframe(stat, use_container_width=True)
-                    progress.empty()
+                if not ext_col:
+                    st.error("Không tìm thấy cột 'Extension' trong file. Vui lòng kiểm tra lại file CSV.")
                 else:
-                    st.warning("Không tìm thấy cột 'Extension' trong file.")
+                    col_name = ext_col[0]
+                    f_c.seek(0)
+                    # Bước 2: Đọc file với bộ lọc lỗi nghiêm ngặt
+                    for chunk in pd.read_csv(f_c, usecols=[col_name], chunksize=100000, 
+                                             sep=None, engine='python', encoding='utf-8', 
+                                             on_bad_lines='skip', encoding_errors='ignore'):
+                        
+                        chunk['Staff'] = chunk[col_name].astype(str).apply(lambda x: x.split('-')[-1].strip() if '-' in x else x)
+                        c_dict = chunk['Staff'].value_counts().to_dict()
+                        for s, val in c_dict.items():
+                            counts[s] = counts.get(s, 0) + val
+                    
+                    if counts:
+                        stat = pd.DataFrame(list(counts.items()), columns=['Nhân viên', 'Tổng cuộc gọi']).sort_values('Tổng cuộc gọi', ascending=False)
+                        
+                        # Vinh danh (4-2-1-3-5)
+                        st.subheader("🏆 Top 5 Chiến thần Telesale")
+                        v_cols = st.columns(5)
+                        top_5 = stat.head(5)
+                        d_map = [{'i':3,'t':"🏅 Hạng 4"}, {'i':1,'t':"🥈 Hạng 2"}, {'i':0,'t':"👑 VÔ ĐỊCH"}, {'i':2,'t':"🥉 Hạng 3"}, {'i':4,'t':"🏅 Hạng 5"}]
+                        for i, item in enumerate(d_map):
+                            if item['i'] < len(top_5):
+                                row = top_5.iloc[item['i']]
+                                with v_cols[i]:
+                                    st.markdown(f"<div class='podium-card rank-call-glow'><div style='color:#00D4FF;'>{item['t']}</div><span class='staff-name-highlight'>{row['Nhân viên']}</span><div class='rev-val'>{row['Tổng cuộc gọi']:,}</div></div>", unsafe_allow_html=True)
+                        
+                        stat.index = np.arange(1, len(stat)+1)
+                        st.markdown("---")
+                        st.dataframe(stat, use_container_width=True)
             except Exception as e:
-                # Nếu C engine lỗi, chuyển sang Python engine với encoding Latin-1
-                st.info("Đang dùng chế độ tương thích cao cho file phức tạp...")
-                f_c.seek(0)
-                # (Phần xử lý dự phòng tương tự để đảm bảo luôn chạy được)
-                st.error(f"Lỗi: {e}. Vui lòng kiểm tra lại định dạng file CSV.")
+                st.error(f"Hệ thống gặp lỗi dữ liệu: {e}. Hãy đảm bảo file Call Log của anh là định dạng CSV chuẩn.")
         return
 
-    # CÁC CÔNG CỤ 1, 2, 4 (GIỮ NGUYÊN HOÀN TOÀN)
+    # CÁC CÔNG CỤ 1, 2, 4 (GIỮ NGUYÊN)
     f_m = st.sidebar.file_uploader("Nạp file Masterlife chính", type=['csv', 'xlsx'], key='f_main')
     if f_m:
         df = smart_load(f_m)
@@ -123,9 +114,8 @@ def main():
         if menu == "📈 So sánh dòng tiền":
             st.title("📈 So Sánh Dòng Tiền 3 Năm")
             f_n1, f_n2 = st.sidebar.file_uploader("File 2024", type=['csv', 'xlsx']), st.sidebar.file_uploader("File 2023", type=['csv', 'xlsx'])
-            all_y = []
-            curr_v = df.groupby(c['e'])['REV'].sum().reindex(range(1,13)).fillna(0)
-            curr_v.name = f"Năm {curr_y}"; all_y.append(curr_v)
+            all_y = [df.groupby(c['e'])['REV'].sum().reindex(range(1,13)).fillna(0)]
+            all_y[0].name = f"Năm {curr_y}"
             for i, f_ex in enumerate([f_n1, f_n2]):
                 df_e = smart_load(f_ex)
                 if df_e is not None:
@@ -176,7 +166,6 @@ def main():
             df.to_excel(writer, index=False, sheet_name='Data_Detail')
             if 'mtx_r' in locals(): mtx_r.to_excel(writer, sheet_name='Cohort_Revenue')
             if 'mtx_c' in locals(): mtx_c.to_excel(writer, sheet_name='Cohort_Count')
-            if menu == "📈 So sánh dòng tiền" and 'comp_df' in locals(): comp_df.to_excel(writer, sheet_name='Comparison_Report')
         st.sidebar.markdown("---")
         st.sidebar.download_button("📥 TẢI BÁO CÁO FULL (4 SHEETS)", output.getvalue(), "TeamG_Strategic_Report.xlsx")
 
