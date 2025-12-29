@@ -5,133 +5,122 @@ import re
 from datetime import datetime
 from io import BytesIO
 
-# --- 1. CẤU HÌNH GIAO DIỆN ---
-st.set_page_config(page_title="TMC Management System", layout="wide")
+# --- 1. GIAO DIỆN DARK MODE ---
+st.set_page_config(page_title="Team G Performance Center", layout="wide")
 st.markdown("""
     <style>
     .main { background-color: #0E1117; color: #FFFFFF; }
-    [data-testid="stMetricValue"] { color: #00D4FF !important; font-weight: 900 !important; }
-    .award-card, .call-card {
-        background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
-        border-radius: 12px; padding: 15px; text-align: center;
-        box-shadow: 0 4px 10px rgba(0, 212, 255, 0.15);
-    }
-    .award-card { border: 1px solid #ffd700; }
-    .call-card { border: 1px solid #00D4FF; }
+    [data-testid="stMetricValue"] { color: #00D4FF !important; font-weight: 900 !important; font-size: 2.5rem !important; }
+    [data-testid="stMetricLabel"] p { color: #8B949E !important; font-size: 0.9rem !important; letter-spacing: 1px; }
+    [data-testid="stChart"] { height: 350px !important; }
     </style>
     """, unsafe_allow_html=True)
 
-# --- 2. HÀM ĐỌC FILE THÔNG MINH (CHỐNG LỖI MÃ HÓA & CẤU TRÚC) ---
-def safe_load_df(file, is_master=True):
+# --- 2. HÀM ĐỌC FILE ---
+def smart_load(file):
     try:
         if file.name.endswith(('.xlsx', '.xls')):
-            if is_master:
-                raw = pd.read_excel(file, header=None)
-                skip = 0
-                for i, row in raw.head(20).iterrows():
-                    if 'TARGET PREMIUM' in " ".join(str(val).upper() for val in row):
-                        skip = i; break
-                return pd.read_excel(file, skiprows=skip)
-            return pd.read_excel(file)
+            raw_df = pd.read_excel(file, header=None)
         else:
-            # Thử nhiều bảng mã và tự dò dấu phân cách cho CSV
-            for enc in ['utf-8-sig', 'latin1', 'cp1252']:
-                try:
-                    file.seek(0)
-                    return pd.read_csv(file, encoding=enc, sep=None, engine='python', on_bad_lines='skip')
-                except: continue
-            return pd.read_csv(file, encoding='utf-8', errors='ignore', on_bad_lines='skip')
+            file.seek(0)
+            raw_df = pd.read_csv(file, sep=None, engine='python', header=None, encoding='utf-8', errors='ignore')
+        header_row = 0
+        for i, row in raw_df.head(20).iterrows():
+            if 'TARGET PREMIUM' in " ".join(str(val).upper() for val in row):
+                header_row = i
+                break
+        file.seek(0)
+        return pd.read_excel(file, skiprows=header_row) if file.name.endswith(('.xlsx', '.xls')) else pd.read_csv(file, sep=None, engine='python', skiprows=header_row, encoding='utf-8', errors='ignore')
     except: return None
 
-# --- 3. CHƯƠNG TRÌNH CHÍNH ---
-def main():
-    st.sidebar.title("🛡️ TMC Portal")
-    menu = st.sidebar.radio("Chọn công cụ:", ["📊 Phân tích Cohort", "🏆 Vinh danh Doanh số", "📞 Phân tích Call Log"])
+# --- 3. ENGINE PHÂN TÍCH TEAM G ---
+def process_team_g(file):
+    df = smart_load(file)
+    if df is None: return
 
-    # --- MODULE 1 & 2: MASTERLIFE (DOANH SỐ) ---
-    if menu in ["📊 Phân tích Cohort", "🏆 Vinh danh Doanh số"]:
-        f_m = st.sidebar.file_uploader("Nạp file Masterlife", type=['csv', 'xlsx'], key="m_up")
-        if f_m:
-            df_m = safe_load_df(f_m, is_master=True)
-            if df_m is not None:
-                try:
-                    # Logic dọn dẹp dữ liệu Masterlife
-                    curr_y = datetime.now().year
-                    cols = df_m.columns
-                    c_c = [" ".join(str(c).upper().split()) for c in cols]
-                    
-                    def find_c(ks):
-                        for i, c in enumerate(c_c):
-                            if all(k in c for k in ks): return cols[i]
-                        return None
+    current_year = datetime.now().year
+    cols = df.columns
+    c_list = [" ".join(str(c).upper().split()) for c in cols]
+    
+    def get_c(keys):
+        for i, c in enumerate(c_list):
+            if all(k in c for k in keys): return cols[i]
+        return None
 
-                    m_c, e_c, v_c, w_c, id_c, src_c, t_c, o_c = find_c(['TARGET','PREMIUM']), find_c(['THÁNG','FILE']), find_c(['THÁNG','LEAD']), find_c(['NĂM','LEAD']), find_c(['LEAD','ID']), find_c(['SOURCE']), find_c(['TEAM']), find_c(['OWNER'])
-                    
-                    # Lọc Team G và tính tiền
-                    df_m = df_m[df_m[t_c].astype(str).str.upper().str.contains('G', na=False)].copy()
-                    df_m['REV'] = df_m[m_c].apply(lambda v: float(re.sub(r'[^0-9.]', '', str(v))) if pd.notna(v) and re.sub(r'[^0-9.]', '', str(v)) != '' else 0.0)
-                    
-                    # Phân loại và Cohort (Xử lý lỗi ValueError dòng trống)
-                    df_m['SRC_TYPE'] = df_m[src_c].apply(lambda v: 'COLD CALL' if any(x in str(v).upper() for x in ['CC','COLDCALL']) else 'FUNNEL')
-                    
-                    def get_cohort(r):
-                        if r['SRC_TYPE'] == 'COLD CALL': return "📦 NHÓM COLD CALL"
-                        try:
-                            return f"Lead T{int(float(r[v_c])):02d}/{int(float(r[w_c]))}"
-                        except: return "❌ Thiếu ngày nhận"
-                    
-                    df_m['NHÓM'] = df_m.apply(get_cohort, axis=1)
-                    df_m['TH_CHOT'] = df_m[e_c].apply(lambda v: int(float(v)) if pd.notna(v) and 1<=int(float(v))<=12 else None)
+    m_c = get_c(['TARGET', 'PREMIUM'])
+    e_c = get_c(['THÁNG', 'NHẬN', 'FILE'])
+    v_c = get_c(['THÁNG', 'NHẬN', 'LEAD'])
+    w_c = get_c(['NĂM', 'NHẬN', 'LEAD'])
+    id_c = get_c(['LEAD', 'ID'])
+    team_c = get_c(['TEAM']) # Dò cột Team (Cột F)
 
-                    if menu == "📊 Phân tích Cohort":
-                        st.title("🚀 Team G - Phân tích Cohort")
-                        st.bar_chart(df_m.groupby(['TH_CHOT', 'SRC_TYPE'])['REV'].sum().unstack().reindex(range(1,13)).fillna(0))
-                        st.dataframe(df_m.pivot_table(index='NHÓM', columns='TH_CHOT', values='REV', aggfunc='sum').fillna(0).reindex(columns=range(1,13)).fillna(0), use_container_width=True)
-                    else:
-                        st.title("🏆 Team G - Vinh danh Doanh số")
-                        lb = df_m.groupby(o_c).agg({'REV':'sum', id_c:'nunique'}).sort_values('REV', ascending=False).reset_index()
-                        st.dataframe(lb, use_container_width=True)
-                except Exception as e: st.error(f"Lỗi xử lý file Masterlife: {e}")
+    # --- LOGIC LỌC TEAM G ---
+    if team_c:
+        # Giữ lại các dòng có chứa chữ "G" trong cột Team
+        df = df[df[team_c].astype(str).str.upper().str.contains('G', na=False)]
+    else:
+        st.error("❌ Không tìm thấy cột 'Team'. Vui lòng kiểm tra lại file.")
+        return
 
-    # --- MODULE 3: CALL LOG (CUỘC GỌI) ---
-    elif menu == "📞 Phân tích Call Log":
-        st.title("📞 Call Performance Analytics")
-        f_c = st.sidebar.file_uploader("Nạp file Log Cuộc gọi", type=['csv', 'xlsx'], key="c_up")
-        btn = st.sidebar.button("🚀 Chạy phân tích cuộc gọi")
+    # Làm sạch tiền
+    df['REV'] = df[m_c].apply(lambda v: float(re.sub(r'[^0-9.]', '', str(v))) if pd.notna(v) and re.sub(r'[^0-9.]', '', str(v)) != '' else 0.0)
+    
+    # Phân nhóm Lead
+    def assign_cohort(row):
+        try:
+            y, m = int(float(row[w_c])), int(float(row[v_c]))
+            return f"Lead T{m:02d}/{y}" if y == current_year else f"Trước năm {current_year}"
+        except: return "❌ Thiếu thông tin Lead"
+
+    df['NHÓM_LEAD'] = df.apply(assign_cohort, axis=1)
+    df['TH_CHOT_NUM'] = df[e_c].apply(lambda v: int(float(v)) if pd.notna(v) and 1 <= int(float(v)) <= 12 else None)
+
+    # --- DỮ LIỆU BIỂU ĐỒ ---
+    chart_data = df.groupby('TH_CHOT_NUM')['REV'].sum().reindex(range(1, 13)).fillna(0)
+    chart_df = pd.DataFrame({'Tháng': [f"Tháng {i:02d}" for i in range(1, 13)], 'Doanh Số G': chart_data.values}).set_index('Tháng')
+
+    # Ma trận Doanh số & Số lượng
+    matrix_rev = df.pivot_table(index='NHÓM_LEAD', columns='TH_CHOT_NUM', values='REV', aggfunc='sum').fillna(0)
+    matrix_count = df.pivot_table(index='NHÓM_LEAD', columns='TH_CHOT_NUM', values=id_c, aggfunc='nunique').fillna(0)
+
+    def sort_mtx(mtx):
+        mtx = mtx.reindex(columns=range(1, 13)).fillna(0)
+        mtx.columns = [f"Tháng {int(c)}" for c in mtx.columns]
+        idx_current = sorted([i for i in mtx.index if f"/{current_year}" in i])
+        final_idx = ([f"Trước năm {current_year}"] if f"Trước năm {current_year}" in mtx.index else []) + idx_current + ([i for i in mtx.index if "❌" in i])
+        return mtx.reindex(final_idx)
+
+    matrix_rev = sort_mtx(matrix_rev)
+    matrix_count = sort_mtx(matrix_count)
+
+    # --- HIỂN THỊ DASHBOARD ---
+    st.title(f"📊 Team G Strategic Report - {current_year}")
+    st.area_chart(chart_df, color="#00FF7F") # Đổi sang màu xanh lá cho Team G
+
+    col1, col2 = st.columns(2)
+    col1.metric("💰 TỔNG DOANH THU TEAM G", f"${df['REV'].sum():,.2f}")
+    col2.metric("📋 TỔNG HỢP ĐỒNG TEAM G", f"{df[id_c].nunique():,}")
+
+    t1, t2 = st.tabs(["💵 Doanh số ($)", "🔢 Số lượng hồ sơ"])
+    with t1: st.dataframe(matrix_rev.style.format("${:,.0f}"), use_container_width=True)
+    with t2: st.dataframe(matrix_count.style.format("{:,.0f}"), use_container_width=True)
+
+    # --- XUẤT EXCEL ĐA SHEET ---
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+        matrix_rev.to_excel(writer, sheet_name='TeamG_Revenue')
+        ws1 = writer.sheets['TeamG_Revenue']
+        ws1.conditional_format(1, 1, len(matrix_rev), 12, {'type': '3_color_scale', 'min_color': "#F0FFF0", 'mid_color': "#90EE90", 'max_color': "#006400"})
         
-        if f_c and btn:
-            df_call = safe_load_df(f_c, is_master=False)
-            if df_call is not None:
-                try:
-                    # Logic bù trừ From/Extension
-                    df_call['Ref'] = df_call['From'].fillna(df_call['Extension'])
-                    
-                    def get_stf(r):
-                        ex = str(r['Extension']).strip()
-                        return ex.split('-')[-1].strip() if '-' in ex else (ex if ex.lower() != 'nan' else "Unknown")
-                    
-                    df_call['Staff'] = df_call.apply(get_stf, axis=1)
-                    
-                    def to_s(t):
-                        try:
-                            h,m,s = map(int, str(t).split(':')); return h*3600+m*60+s
-                        except: return 0
-                    
-                    df_call['Sec'] = df_call['Duration'].apply(to_s)
-                    stat = df_call.groupby('Staff').agg({'Ref':'count', 'Sec':'sum'}).reset_index().sort_values('Ref', ascending=False)
-                    stat['Time'] = stat['Sec'].apply(lambda x: f"{int(x//3600):02d}:{int((x%3600)//60):02d}:{int(x%60):02d}")
+        matrix_count.to_excel(writer, sheet_name='TeamG_Count')
+        ws2 = writer.sheets['TeamG_Count']
+        ws2.conditional_format(1, 1, len(matrix_count), 12, {'type': '3_color_scale', 'min_color': "#FFF5EE", 'mid_color': "#FDAE6B", 'max_color': "#7F2704"})
+        
+        df.to_excel(writer, index=False, sheet_name='TeamG_Data_Detail')
 
-                    # Vinh danh Top 5
-                    st.subheader("🏆 Top 5 Chiến thần Telesale")
-                    cols = st.columns(5)
-                    for i, (idx, row) in enumerate(stat.head(5).iterrows()):
-                        with cols[i]:
-                            st.markdown(f"""<div class="call-card"><div style="color:#00D4FF;">Hạng {i+1}</div>
-                                <div style="color:white;font-weight:bold;">{row['Staff']}</div>
-                                <div style="color:#00D4FF;font-size:1.5rem;font-weight:bold;">{row['Ref']}</div>
-                                <div style="color:#8B949E;font-size:0.7rem;">{row['Time']}</div></div>""", unsafe_allow_html=True)
-                    st.dataframe(stat[['Staff', 'Ref', 'Time']], use_container_width=True)
-                except Exception as e: st.error(f"Lỗi xử lý file Call Log: {e}")
+    st.sidebar.markdown("---")
+    st.sidebar.download_button(f"📥 Tải Báo Cáo Team G ({current_year})", output.getvalue(), f"Team_G_Report_{current_year}.xlsx")
 
-if __name__ == "__main__":
-    main()
+st.title("🛡️ Team G Management Portal")
+f = st.file_uploader("Nạp file Masterlife để lọc Team G", type=['csv', 'xlsx'])
+if f: process_team_g(f)
