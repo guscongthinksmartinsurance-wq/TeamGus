@@ -5,13 +5,12 @@ import re
 from datetime import datetime
 from io import BytesIO
 
-# --- 1. GIAO DIỆN & STYLE CHUẨN ---
+# --- 1. GIAO DIỆN & STYLE ---
 st.set_page_config(page_title="Team G Performance Center", layout="wide")
 st.markdown("""
     <style>
     .main { background-color: #0E1117; color: #FFFFFF; }
     [data-testid="stMetricValue"] { color: #00FF7F !important; font-weight: 900 !important; font-size: 2.5rem !important; }
-    
     .podium-card {
         background: linear-gradient(145deg, #1e293b, #0f172a);
         border-radius: 20px; padding: 25px; text-align: center;
@@ -31,7 +30,7 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# --- 2. HÀM ĐỌC FILE (KHÔNG ĐỔI) ---
+# --- 2. HÀM ĐỌC FILE ---
 def smart_load(file):
     try:
         if file.name.endswith(('.xlsx', '.xls')):
@@ -62,13 +61,11 @@ def process_team_g(file, show_vinh_danh=False):
         return None
 
     m_c, e_c, v_c, w_c, id_c, team_c, owner_c = get_c(['TARGET','PREMIUM']), get_c(['THÁNG','FILE']), get_c(['THÁNG','LEAD']), get_c(['NĂM','LEAD']), get_c(['LEAD','ID']), get_c(['TEAM']), get_c(['OWNER'])
-
     if team_c:
         df = df[df[team_c].astype(str).str.upper().str.contains('G', na=False)]
-    
     df['REV'] = df[m_c].apply(lambda v: float(re.sub(r'[^0-9.]', '', str(v))) if pd.notna(v) and re.sub(r'[^0-9.]', '', str(v)) != '' else 0.0)
 
-    # --- KHÔI PHỤC metric TỔNG (TRƯỚC KHI CHIA TAB/MENU) ---
+    # Chỉ số tổng quát
     st.title(f"📊 Team G Strategic Report - {current_year}")
     m1, m2 = st.columns(2)
     m1.metric("💰 TỔNG DOANH THU TEAM G", f"${df['REV'].sum():,.2f}")
@@ -78,60 +75,67 @@ def process_team_g(file, show_vinh_danh=False):
         lb = df.groupby(owner_c).agg({'REV':'sum', id_c:'nunique'}).sort_values('REV', ascending=False).reset_index()
         lb.columns = ['Thành viên', 'Doanh số', 'Hợp đồng']
         
-        # FIX LỖI XẾP HẠNG: Đảm bảo Hạng 1 (Kenny) luôn ở giữa
+        # FIX LOGIC PODIUM: Hạng 1 (nhiều tiền nhất) luôn ở giữa
         top_5 = lb.head(5).copy()
-        # Logic gán cứng vị trí: 2-1-3-4-5
-        # Index 0 là người cao nhất -> hiển thị ở cột thứ 2 (giữa)
-        order = [1, 0, 2, 3, 4] 
-        cols_v = st.columns(5)
-        titles = ["🥈 HẠNG 2", "👑 VÔ ĐỊCH", "🥉 HẠNG 3", "🏅 HẠNG 4", "🏅 HẠNG 5"]
+        # display_map định nghĩa: Cột 0 hiện Hạng 2, Cột 1 hiện Hạng 1, Cột 2 hiện Hạng 3...
+        display_map = [
+            {'idx': 1, 'title': "🥈 HẠNG 2", 'glow': False}, # Cột 1
+            {'idx': 0, 'title': "👑 VÔ ĐỊCH", 'glow': True},  # Cột 2 (Giữa)
+            {'idx': 2, 'title': "🥉 HẠNG 3", 'glow': False}, # Cột 3
+            {'idx': 3, 'title': "🏅 HẠNG 4", 'glow': False}, # Cột 4
+            {'idx': 4, 'title': "🏅 HẠNG 5", 'glow': False}  # Cột 5
+        ]
         
-        for i, idx in enumerate(order):
+        cols_v = st.columns(5)
+        for i, item in enumerate(display_map):
+            idx = item['idx']
             if idx < len(top_5):
                 row = top_5.iloc[idx]
-                is_top = (idx == 0) # Người có doanh số cao nhất là idx=0
                 with cols_v[i]:
-                    st.markdown(f"""<div class="podium-card {'rank-1-glow' if is_top else ''}">
-                        <div style="color:{'#ffd700' if is_top else '#8B949E'};font-weight:bold;">{titles[idx]}</div>
+                    st.markdown(f"""<div class="podium-card {'rank-1-glow' if item['glow'] else ''}">
+                        <div style="color:{'#ffd700' if item['glow'] else '#8B949E'};font-weight:bold;">{item['title']}</div>
                         <span class="staff-name-highlight">{row['Thành viên']}</span>
                         <div class="rev-gold">${row['Doanh số']:,.0f}</div>
                         <div style="color:#00D4FF;font-weight:bold;">{row['Hợp đồng']} Hợp đồng</div>
                     </div>""", unsafe_allow_html=True)
         st.markdown("---")
         st.dataframe(lb.style.format({'Doanh số': '{:,.0f}'}), use_container_width=True)
-        return
+    else:
+        # LOGIC COHORT
+        def assign_cohort(row):
+            try:
+                y, m = int(float(row[w_c])), int(float(row[v_c]))
+                return f"Lead T{m:02d}/{y}" if y == current_year else f"Trước năm {current_year}"
+            except: return "❌ Thiếu thông tin Lead"
+        df['NHÓM_LEAD'] = df.apply(assign_cohort, axis=1)
+        df['TH_CHOT_NUM'] = df[e_c].apply(lambda v: int(float(v)) if pd.notna(v) and 1 <= int(float(v)) <= 12 else None)
+        
+        chart_data = df.groupby('TH_CHOT_NUM')['REV'].sum().reindex(range(1, 13)).fillna(0)
+        chart_df = pd.DataFrame({'Tháng': [f"Tháng {i:02d}" for i in range(1, 13)], 'Doanh Số G': chart_data.values}).set_index('Tháng')
+        st.area_chart(chart_df, color="#00FF7F")
+        
+        matrix_rev = df.pivot_table(index='NHÓM_LEAD', columns='TH_CHOT_NUM', values='REV', aggfunc='sum').fillna(0)
+        matrix_count = df.pivot_table(index='NHÓM_LEAD', columns='TH_CHOT_NUM', values=id_c, aggfunc='nunique').fillna(0)
 
-    # --- LOGIC COHORT ---
-    def assign_cohort(row):
-        try:
-            y, m = int(float(row[w_c])), int(float(row[v_c]))
-            return f"Lead T{m:02d}/{y}" if y == current_year else f"Trước năm {current_year}"
-        except: return "❌ Thiếu thông tin Lead"
+        def sort_mtx(mtx):
+            mtx = mtx.reindex(columns=range(1, 13)).fillna(0)
+            mtx.columns = [f"Tháng {int(c)}" for c in mtx.columns]
+            idx_current = sorted([i for i in mtx.index if f"/{current_year}" in i])
+            final_idx = ([f"Trước năm {current_year}"] if f"Trước năm {current_year}" in mtx.index else []) + idx_current + ([i for i in mtx.index if "❌" in i])
+            return mtx.reindex(final_idx)
 
-    df['NHÓM_LEAD'] = df.apply(assign_cohort, axis=1)
-    df['TH_CHOT_NUM'] = df[e_c].apply(lambda v: int(float(v)) if pd.notna(v) and 1 <= int(float(v)) <= 12 else None)
-    
-    chart_data = df.groupby('TH_CHOT_NUM')['REV'].sum().reindex(range(1, 13)).fillna(0)
-    chart_df = pd.DataFrame({'Tháng': [f"Tháng {i:02d}" for i in range(1, 13)], 'Doanh Số G': chart_data.values}).set_index('Tháng')
+        t1, t2 = st.tabs(["💵 Doanh số ($)", "🔢 Số lượng hồ sơ"])
+        with t1: st.dataframe(sort_mtx(matrix_rev).style.format("${:,.0f}"), use_container_width=True)
+        with t2: st.dataframe(sort_mtx(matrix_count).style.format("{:,.0f}"), use_container_width=True)
 
-    st.area_chart(chart_df, color="#00FF7F")
-    
-    # Ma trận Doanh số & Số lượng
-    matrix_rev = df.pivot_table(index='NHÓM_LEAD', columns='TH_CHOT_NUM', values='REV', aggfunc='sum').fillna(0)
-    matrix_count = df.pivot_table(index='NHÓM_LEAD', columns='TH_CHOT_NUM', values=id_c, aggfunc='nunique').fillna(0)
+    # XUẤT EXCEL (KHÔI PHỤC NÚT XUẤT FILE)
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+        df.to_excel(writer, index=False, sheet_name='TeamG_Detail')
+    st.sidebar.markdown("---")
+    st.sidebar.download_button("📥 Tải Báo Cáo Strategic (.xlsx)", output.getvalue(), f"TeamG_Report_{datetime.now().strftime('%Y%m%d')}.xlsx")
 
-    def sort_mtx(mtx):
-        mtx = mtx.reindex(columns=range(1, 13)).fillna(0)
-        mtx.columns = [f"Tháng {int(c)}" for c in mtx.columns]
-        idx_current = sorted([i for i in mtx.index if f"/{current_year}" in i])
-        final_idx = ([f"Trước năm {current_year}"] if f"Trước năm {current_year}" in mtx.index else []) + idx_current + ([i for i in mtx.index if "❌" in i])
-        return mtx.reindex(final_idx)
-
-    t1, t2 = st.tabs(["💵 Doanh số ($)", "🔢 Số lượng hồ sơ"])
-    with t1: st.dataframe(sort_mtx(matrix_rev).style.format("${:,.0f}"), use_container_width=True)
-    with t2: st.dataframe(sort_mtx(matrix_count).style.format("{:,.0f}"), use_container_width=True)
-
-# --- 4. MODULE CALL LOG (DỮ LIỆU RIÊNG) ---
+# --- 4. MODULE CALL LOG ---
 def process_call_log(file):
     st.title("📞 Call Performance Analytics")
     try:
@@ -150,10 +154,10 @@ def process_call_log(file):
     except: st.error("Lỗi file Call Log.")
 
 # --- 5. ĐIỀU HƯỚNG ---
-menu = st.sidebar.radio("Menu Team G:", ["📊 Phân tích Cohort", "🏆 Vinh danh Doanh số", "📞 Phân tích Call Log"])
-f = st.sidebar.file_uploader("Nạp file dữ liệu", type=['csv', 'xlsx'])
+menu = st.sidebar.radio("Chọn công cụ xem:", ["📊 Phân tích Cohort", "🏆 Vinh danh cá nhân", "📞 Phân tích Call Log"])
+f = st.sidebar.file_uploader("Nạp file Masterlife", type=['csv', 'xlsx'])
 
 if f:
     if menu == "📊 Phân tích Cohort": process_team_g(f, False)
-    elif menu == "🏆 Vinh danh Doanh số": process_team_g(f, True)
+    elif menu == "🏆 Vinh danh cá nhân": process_team_g(f, True)
     elif menu == "📞 Phân tích Call Log": process_call_log(f)
