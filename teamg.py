@@ -5,22 +5,43 @@ import re
 from datetime import datetime
 from io import BytesIO
 
-# --- 1. GIAO DIỆN DARK MODE ---
+# --- 1. GIAO DIỆN DARK MODE & STYLE NỔI BẬT ---
 st.set_page_config(page_title="Team G Performance Center", layout="wide")
 st.markdown("""
     <style>
     .main { background-color: #0E1117; color: #FFFFFF; }
     [data-testid="stMetricValue"] { color: #00D4FF !important; font-weight: 900 !important; font-size: 2.5rem !important; }
-    [data-testid="stMetricLabel"] p { color: #8B949E !important; font-size: 0.9rem !important; letter-spacing: 1px; }
-    [data-testid="stChart"] { height: 350px !important; }
+    
+    /* STYLE CHO THẺ VINH DANH TOP 5 */
     .award-card {
         background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
-        border: 1px solid #ffd700; border-radius: 12px; padding: 15px; text-align: center;
+        border: 2px solid #ffd700; /* Viền vàng dày hơn */
+        border-radius: 15px;
+        padding: 20px;
+        text-align: center;
+        box-shadow: 0 10px 20px rgba(255, 215, 0, 0.2); /* Đổ bóng vàng */
+        transition: transform 0.3s;
+    }
+    .award-card:hover { transform: scale(1.05); }
+    
+    .rank-label { color: #ffd700; font-size: 0.9rem; font-weight: bold; text-transform: uppercase; letter-spacing: 1px; }
+    .staff-name { color: #FFFFFF !important; font-size: 1.4rem !important; font-weight: 800 !important; margin: 10px 0; display: block; }
+    .revenue-val { color: #ffd700; font-size: 1.6rem; font-weight: bold; }
+    .contract-val { color: #8B949E; font-size: 0.85rem; }
+    
+    /* Style cho thẻ Call Log */
+    .call-card {
+        background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
+        border: 2px solid #00D4FF;
+        border-radius: 15px;
+        padding: 20px;
+        text-align: center;
+        box-shadow: 0 10px 20px rgba(0, 212, 255, 0.2);
     }
     </style>
     """, unsafe_allow_html=True)
 
-# --- 2. HÀM ĐỌC FILE ---
+# --- 2. HÀM ĐỌC FILE (GIỮ NGUYÊN BẢN CHUẨN) ---
 def smart_load(file):
     try:
         if file.name.endswith(('.xlsx', '.xls')):
@@ -37,7 +58,7 @@ def smart_load(file):
         return pd.read_excel(file, skiprows=header_row) if file.name.endswith(('.xlsx', '.xls')) else pd.read_csv(file, sep=None, engine='python', skiprows=header_row, encoding='utf-8', errors='ignore')
     except: return None
 
-# --- 3. MODULE CALL LOG (RIÊNG BIỆT) ---
+# --- 3. MODULE CALL LOG (SỬA LỖI HIỂN THỊ) ---
 def process_call_log(file):
     try:
         for enc in ['utf-8-sig', 'latin1', 'cp1252']:
@@ -47,7 +68,6 @@ def process_call_log(file):
                 break
             except: continue
         
-        # Logic bù trừ: From trống lấy Extension
         df_c['Call_Ref'] = df_c['From'].fillna(df_c['Extension'])
         def get_name(ext):
             ext = str(ext)
@@ -57,15 +77,23 @@ def process_call_log(file):
         stat = df_c.groupby('Staff')['Call_Ref'].count().sort_values(ascending=False).reset_index()
         stat.columns = ['Nhân viên', 'Tổng cuộc gọi']
         
-        st.subheader("🏆 Top 5 Chiến thần Telesale")
+        st.subheader("📞 Top 5 Chiến thần Telesale")
         c = st.columns(5)
         for i, (idx, row) in enumerate(stat.head(5).iterrows()):
             with c[i]:
-                st.markdown(f"<div class='award-card' style='border-color:#00D4FF'><div style='color:#00D4FF'>Hạng {i+1}</div><b>{row['Nhân viên']}</b><br><span style='font-size:1.5rem'>{row['Tổng cuộc gọi']}</span></div>", unsafe_allow_html=True)
+                st.markdown(f"""
+                    <div class='call-card'>
+                        <div style='color:#00D4FF; font-weight:bold;'>HẠNG {i+1}</div>
+                        <span class='staff-name'>{row['Nhân viên']}</span>
+                        <div style='color:#00D4FF; font-size:1.8rem; font-weight:bold;'>{row['Tổng cuộc gọi']}</div>
+                        <div style='color:#8B949E; font-size:0.8rem;'>Cuộc gọi</div>
+                    </div>
+                """, unsafe_allow_html=True)
+        st.markdown("---")
         st.dataframe(stat, use_container_width=True)
-    except: st.error("Lỗi đọc file Call Log.")
+    except: st.error("Lỗi đọc file Call Log. Vui lòng kiểm tra lại định dạng file.")
 
-# --- 4. ENGINE PHÂN TÍCH TEAM G (ĐÃ SỬA LỖI TYPO) ---
+# --- 4. ENGINE PHÂN TÍCH TEAM G ---
 def process_team_g(file, show_vinh_danh=False):
     df = smart_load(file)
     if df is None: return
@@ -89,14 +117,24 @@ def process_team_g(file, show_vinh_danh=False):
         st.title("🏆 Vinh danh Doanh số Team G")
         lb = df.groupby(owner_c).agg({'REV':'sum', id_c:'nunique'}).sort_values('REV', ascending=False).reset_index()
         lb.columns = ['Thành viên', 'Doanh số', 'Hợp đồng']
+        
         cols_v = st.columns(5)
+        medals = ["🥇 HẠNG 1", "🥈 HẠNG 2", "🥉 HẠNG 3", "🏅 HẠNG 4", "🏅 HẠNG 5"]
         for i, (idx, row) in enumerate(lb.head(5).iterrows()):
             with cols_v[i]:
-                st.markdown(f"<div class='award-card'><div style='color:#ffd700'>Hạng {i+1}</div><b>{row['Thành viên']}</b><br><span style='color:#ffd700'>${row['Doanh số']:,.0f}</span><br><small>{row['Hợp đồng']} HĐ</small></div>", unsafe_allow_html=True)
+                st.markdown(f"""
+                    <div class='award-card'>
+                        <div class='rank-label'>{medals[i]}</div>
+                        <span class='staff-name'>{row['Thành viên']}</span>
+                        <div class='revenue-val'>${row['Doanh số']:,.0f}</div>
+                        <div class='contract-val'>{row['Hợp đồng']} Hợp đồng</div>
+                    </div>
+                """, unsafe_allow_html=True)
+        st.markdown("---")
         st.dataframe(lb.style.format({'Doanh số': '{:,.0f}'}), use_container_width=True)
         return
 
-    # --- LOGIC COHORT GỐC ---
+    # --- LOGIC COHORT GỐC CỦA BẠN ---
     def assign_cohort(row):
         try:
             y, m = int(float(row[w_c])), int(float(row[v_c]))
@@ -109,7 +147,6 @@ def process_team_g(file, show_vinh_danh=False):
     chart_data = df.groupby('TH_CHOT_NUM')['REV'].sum().reindex(range(1, 13)).fillna(0)
     chart_df = pd.DataFrame({'Tháng': [f"Tháng {i:02d}" for i in range(1, 13)], 'Doanh Số G': chart_data.values}).set_index('Tháng')
 
-    # FIX LỖI TYPO: NHÓM_LEAD (Đã thêm chữ M)
     matrix_rev = df.pivot_table(index='NHÓM_LEAD', columns='TH_CHOT_NUM', values='REV', aggfunc='sum').fillna(0)
     matrix_count = df.pivot_table(index='NHÓM_LEAD', columns='TH_CHOT_NUM', values=id_c, aggfunc='nunique').fillna(0)
 
