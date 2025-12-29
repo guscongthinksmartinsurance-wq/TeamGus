@@ -6,7 +6,7 @@ from datetime import datetime
 from io import BytesIO
 
 # --- 1. CẤU HÌNH GIAO DIỆN ---
-st.set_page_config(page_title="Team G - Management Portal", layout="wide")
+st.set_page_config(page_title="Team GUS - Management Portal", layout="wide")
 st.markdown("""
     <style>
     .main { background-color: #0E1117; color: #FFFFFF; }
@@ -108,7 +108,7 @@ def main():
             with t_count: st.dataframe(mtx_cnt.style.format("{:,.0f}"), use_container_width=True)
 
         else:
-            st.title("🏆 TEAM G - HALL OF FAME")
+            st.title("🏆 Top TEAM - Policy")
             top_5 = leaderboard.head(5)
             cols_vinh = st.columns(5)
             medals = ["🥇 Hạng 1", "🥈 Hạng 2", "🥉 Hạng 3", "🏅 Hạng 4", "🏅 Hạng 5"]
@@ -133,3 +133,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
