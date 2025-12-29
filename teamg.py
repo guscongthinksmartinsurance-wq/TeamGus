@@ -5,7 +5,7 @@ import re
 from datetime import datetime
 from io import BytesIO
 
-# --- 1. GIAO DIỆN DARK MODE (GIỮ NGUYÊN) ---
+# --- 1. GIAO DIỆN DARK MODE ---
 st.set_page_config(page_title="Team G Performance Center", layout="wide")
 st.markdown("""
     <style>
@@ -20,7 +20,7 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# --- 2. HÀM ĐỌC FILE (GIỮ NGUYÊN) ---
+# --- 2. HÀM ĐỌC FILE ---
 def smart_load(file):
     try:
         if file.name.endswith(('.xlsx', '.xls')):
@@ -37,10 +37,9 @@ def smart_load(file):
         return pd.read_excel(file, skiprows=header_row) if file.name.endswith(('.xlsx', '.xls')) else pd.read_csv(file, sep=None, engine='python', skiprows=header_row, encoding='utf-8', errors='ignore')
     except: return None
 
-# --- 3. MODULE CALL LOG (RIÊNG BIỆT - AN TOÀN) ---
+# --- 3. MODULE CALL LOG (RIÊNG BIỆT) ---
 def process_call_log(file):
     try:
-        # Thử đọc CSV với nhiều bảng mã để tránh lỗi Unicode
         for enc in ['utf-8-sig', 'latin1', 'cp1252']:
             try:
                 file.seek(0)
@@ -50,14 +49,11 @@ def process_call_log(file):
         
         # Logic bù trừ: From trống lấy Extension
         df_c['Call_Ref'] = df_c['From'].fillna(df_c['Extension'])
-        
         def get_name(ext):
             ext = str(ext)
             return ext.split('-')[-1].strip() if '-' in ext else (ext if ext.lower()!='nan' else "Ẩn danh")
         
         df_c['Staff'] = df_c['Extension'].apply(get_name)
-        
-        # Tính toán
         stat = df_c.groupby('Staff')['Call_Ref'].count().sort_values(ascending=False).reset_index()
         stat.columns = ['Nhân viên', 'Tổng cuộc gọi']
         
@@ -67,10 +63,9 @@ def process_call_log(file):
             with c[i]:
                 st.markdown(f"<div class='award-card' style='border-color:#00D4FF'><div style='color:#00D4FF'>Hạng {i+1}</div><b>{row['Nhân viên']}</b><br><span style='font-size:1.5rem'>{row['Tổng cuộc gọi']}</span></div>", unsafe_allow_html=True)
         st.dataframe(stat, use_container_width=True)
-    except Exception as e:
-        st.error(f"Lỗi file log: {e}")
+    except: st.error("Lỗi đọc file Call Log.")
 
-# --- 4. ENGINE PHÂN TÍCH TEAM G (GIỮ NGUYÊN 100% LOGIC CỦA BẠN) ---
+# --- 4. ENGINE PHÂN TÍCH TEAM G (ĐÃ SỬA LỖI TYPO) ---
 def process_team_g(file, show_vinh_danh=False):
     df = smart_load(file)
     if df is None: return
@@ -101,7 +96,7 @@ def process_team_g(file, show_vinh_danh=False):
         st.dataframe(lb.style.format({'Doanh số': '{:,.0f}'}), use_container_width=True)
         return
 
-    # --- TIẾP TỤC LOGIC COHORT GỐC CỦA BẠN ---
+    # --- LOGIC COHORT GỐC ---
     def assign_cohort(row):
         try:
             y, m = int(float(row[w_c])), int(float(row[v_c]))
@@ -110,10 +105,12 @@ def process_team_g(file, show_vinh_danh=False):
 
     df['NHÓM_LEAD'] = df.apply(assign_cohort, axis=1)
     df['TH_CHOT_NUM'] = df[e_c].apply(lambda v: int(float(v)) if pd.notna(v) and 1 <= int(float(v)) <= 12 else None)
+    
     chart_data = df.groupby('TH_CHOT_NUM')['REV'].sum().reindex(range(1, 13)).fillna(0)
     chart_df = pd.DataFrame({'Tháng': [f"Tháng {i:02d}" for i in range(1, 13)], 'Doanh Số G': chart_data.values}).set_index('Tháng')
 
-    matrix_rev = df.pivot_table(index='NHÓ_LEAD', columns='TH_CHOT_NUM', values='REV', aggfunc='sum').fillna(0)
+    # FIX LỖI TYPO: NHÓM_LEAD (Đã thêm chữ M)
+    matrix_rev = df.pivot_table(index='NHÓM_LEAD', columns='TH_CHOT_NUM', values='REV', aggfunc='sum').fillna(0)
     matrix_count = df.pivot_table(index='NHÓM_LEAD', columns='TH_CHOT_NUM', values=id_c, aggfunc='nunique').fillna(0)
 
     def sort_mtx(mtx):
@@ -129,7 +126,7 @@ def process_team_g(file, show_vinh_danh=False):
     with t1: st.dataframe(sort_mtx(matrix_rev).style.format("${:,.0f}"), use_container_width=True)
     with t2: st.dataframe(sort_mtx(matrix_count).style.format("{:,.0f}"), use_container_width=True)
 
-# --- 5. ĐIỀU HƯỚNG SIDEBAR ---
+# --- 5. ĐIỀU HƯỚNG ---
 menu = st.sidebar.radio("Menu Team G:", ["📊 Phân tích Cohort", "🏆 Vinh danh Doanh số", "📞 Phân tích Call Log"])
 f = st.sidebar.file_uploader("Nạp file dữ liệu", type=['csv', 'xlsx'])
 
