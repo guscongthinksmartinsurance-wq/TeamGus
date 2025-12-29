@@ -6,7 +6,7 @@ from datetime import datetime
 from io import BytesIO
 
 # --- 1. CẤU HÌNH GIAO DIỆN ---
-st.set_page_config(page_title="TMC Strategic System", layout="wide")
+st.set_page_config(page_title="TMC Management System", layout="wide")
 st.markdown("""
     <style>
     .main { background-color: #0E1117; color: #FFFFFF; }
@@ -18,104 +18,120 @@ st.markdown("""
     }
     .award-card { border: 1px solid #ffd700; }
     .call-card { border: 1px solid #00D4FF; }
-    div.stButton > button:first-child {
-        background-color: #00D4FF; color: white; width: 100%; border-radius: 8px; font-weight: bold;
-    }
     </style>
     """, unsafe_allow_html=True)
 
-# --- 2. HÀM ĐỌC FILE THÔNG MINH (SỬA LỖI UNICODE) ---
-def smart_load_call_log(file):
-    if file.name.endswith(('.xlsx', '.xls')):
-        return pd.read_excel(file)
-    
-    # Nếu là file CSV, thử nhiều bảng mã để tránh lỗi UnicodeDecodeError
-    encodings = ['utf-8-sig', 'latin1', 'cp1252', 'utf-8']
-    for enc in encodings:
-        try:
-            file.seek(0)
-            return pd.read_csv(file, encoding=enc)
-        except UnicodeDecodeError:
-            continue
-    # Cuối cùng nếu vẫn lỗi, đọc và bỏ qua các ký tự gây lỗi
-    file.seek(0)
-    return pd.read_csv(file, encoding='utf-8', errors='ignore')
-
-def duration_to_seconds(time_str):
+# --- 2. HÀM ĐỌC FILE THÔNG MINH (CHỐNG LỖI MÃ HÓA & CẤU TRÚC) ---
+def safe_load_df(file, is_master=True):
     try:
-        if pd.isna(time_str) or str(time_str).strip() == "": return 0
-        parts = list(map(int, str(time_str).split(':')))
-        if len(parts) == 3: return parts[0] * 3600 + parts[1] * 60 + parts[2]
-        if len(parts) == 2: return parts[0] * 60 + parts[1]
-        return 0
-    except: return 0
-
-def seconds_to_hms(seconds):
-    h, m, s = int(seconds // 3600), int((seconds % 3600) // 60), int(seconds % 60)
-    return f"{h:02d}:{m:02d}:{s:02d}"
+        if file.name.endswith(('.xlsx', '.xls')):
+            if is_master:
+                raw = pd.read_excel(file, header=None)
+                skip = 0
+                for i, row in raw.head(20).iterrows():
+                    if 'TARGET PREMIUM' in " ".join(str(val).upper() for val in row):
+                        skip = i; break
+                return pd.read_excel(file, skiprows=skip)
+            return pd.read_excel(file)
+        else:
+            # Thử nhiều bảng mã và tự dò dấu phân cách cho CSV
+            for enc in ['utf-8-sig', 'latin1', 'cp1252']:
+                try:
+                    file.seek(0)
+                    return pd.read_csv(file, encoding=enc, sep=None, engine='python', on_bad_lines='skip')
+                except: continue
+            return pd.read_csv(file, encoding='utf-8', errors='ignore', on_bad_lines='skip')
+    except: return None
 
 # --- 3. CHƯƠNG TRÌNH CHÍNH ---
 def main():
-    st.sidebar.title("🛡️ TMC Management")
+    st.sidebar.title("🛡️ TMC Portal")
     menu = st.sidebar.radio("Chọn công cụ:", ["📊 Phân tích Cohort", "🏆 Vinh danh Doanh số", "📞 Phân tích Call Log"])
 
-    # --- MODULE A: MASTERLIFE ---
+    # --- MODULE 1 & 2: MASTERLIFE (DOANH SỐ) ---
     if menu in ["📊 Phân tích Cohort", "🏆 Vinh danh Doanh số"]:
-        f_master = st.sidebar.file_uploader("Nạp file Masterlife", type=['csv', 'xlsx'], key="master")
-        if f_master:
-            # (Phần này giữ nguyên logic lọc Team G và Doanh số của bạn)
-            st.info("Module Masterlife đang sẵn sàng.")
+        f_m = st.sidebar.file_uploader("Nạp file Masterlife", type=['csv', 'xlsx'], key="m_up")
+        if f_m:
+            df_m = safe_load_df(f_m, is_master=True)
+            if df_m is not None:
+                try:
+                    # Logic dọn dẹp dữ liệu Masterlife
+                    curr_y = datetime.now().year
+                    cols = df_m.columns
+                    c_c = [" ".join(str(c).upper().split()) for c in cols]
+                    
+                    def find_c(ks):
+                        for i, c in enumerate(c_c):
+                            if all(k in c for k in ks): return cols[i]
+                        return None
 
-    # --- MODULE B: CALL LOG (SỬA LỖI & THÊM NÚT RUN) ---
+                    m_c, e_c, v_c, w_c, id_c, src_c, t_c, o_c = find_c(['TARGET','PREMIUM']), find_c(['THÁNG','FILE']), find_c(['THÁNG','LEAD']), find_c(['NĂM','LEAD']), find_c(['LEAD','ID']), find_c(['SOURCE']), find_c(['TEAM']), find_c(['OWNER'])
+                    
+                    # Lọc Team G và tính tiền
+                    df_m = df_m[df_m[t_c].astype(str).str.upper().str.contains('G', na=False)].copy()
+                    df_m['REV'] = df_m[m_c].apply(lambda v: float(re.sub(r'[^0-9.]', '', str(v))) if pd.notna(v) and re.sub(r'[^0-9.]', '', str(v)) != '' else 0.0)
+                    
+                    # Phân loại và Cohort (Xử lý lỗi ValueError dòng trống)
+                    df_m['SRC_TYPE'] = df_m[src_c].apply(lambda v: 'COLD CALL' if any(x in str(v).upper() for x in ['CC','COLDCALL']) else 'FUNNEL')
+                    
+                    def get_cohort(r):
+                        if r['SRC_TYPE'] == 'COLD CALL': return "📦 NHÓM COLD CALL"
+                        try:
+                            return f"Lead T{int(float(r[v_c])):02d}/{int(float(r[w_c]))}"
+                        except: return "❌ Thiếu ngày nhận"
+                    
+                    df_m['NHÓM'] = df_m.apply(get_cohort, axis=1)
+                    df_m['TH_CHOT'] = df_m[e_c].apply(lambda v: int(float(v)) if pd.notna(v) and 1<=int(float(v))<=12 else None)
+
+                    if menu == "📊 Phân tích Cohort":
+                        st.title("🚀 Team G - Phân tích Cohort")
+                        st.bar_chart(df_m.groupby(['TH_CHOT', 'SRC_TYPE'])['REV'].sum().unstack().reindex(range(1,13)).fillna(0))
+                        st.dataframe(df_m.pivot_table(index='NHÓM', columns='TH_CHOT', values='REV', aggfunc='sum').fillna(0).reindex(columns=range(1,13)).fillna(0), use_container_width=True)
+                    else:
+                        st.title("🏆 Team G - Vinh danh Doanh số")
+                        lb = df_m.groupby(o_c).agg({'REV':'sum', id_c:'nunique'}).sort_values('REV', ascending=False).reset_index()
+                        st.dataframe(lb, use_container_width=True)
+                except Exception as e: st.error(f"Lỗi xử lý file Masterlife: {e}")
+
+    # --- MODULE 3: CALL LOG (CUỘC GỌI) ---
     elif menu == "📞 Phân tích Call Log":
         st.title("📞 Call Performance Analytics")
-        f_call = st.sidebar.file_uploader("Nạp file Log Cuộc gọi", type=['csv', 'xlsx'], key="call_file")
+        f_c = st.sidebar.file_uploader("Nạp file Log Cuộc gọi", type=['csv', 'xlsx'], key="c_up")
+        btn = st.sidebar.button("🚀 Chạy phân tích cuộc gọi")
         
-        # Nút Run để kích hoạt tính toán
-        run_call = st.sidebar.button("🚀 Chạy phân tích cuộc gọi")
-        
-        if f_call and run_call:
-            with st.spinner('Đang xử lý dữ liệu cuộc gọi...'):
-                df_call = smart_load_call_log(f_call)
-                
-                # Logic bù trừ: From trống lấy Extension
-                df_call['Call_Ref'] = df_call['From'].fillna(df_call['Extension'])
-                
-                def parse_staff(row):
-                    ext = str(row['Extension']).strip()
-                    if '-' in ext: return ext.split('-')[-1].strip()
-                    if ext.lower() != 'nan' and ext != '': return ext
-                    return "Ẩn danh"
-                
-                df_call['Staff'] = df_call.apply(parse_staff, axis=1)
-                df_call['Duration_Sec'] = df_call['Duration'].apply(duration_to_seconds)
-                
-                # Tổng hợp
-                stats = df_call.groupby('Staff').agg({'Call_Ref': 'count', 'Duration_Sec': 'sum'}).reset_index()
-                stats.columns = ['Nhân viên', 'Tổng cuộc gọi', 'Giây']
-                stats['Thời lượng'] = stats['Giây'].apply(seconds_to_hms)
-                stats = stats.sort_values(by='Tổng cuộc gọi', ascending=False)
+        if f_c and btn:
+            df_call = safe_load_df(f_c, is_master=False)
+            if df_call is not None:
+                try:
+                    # Logic bù trừ From/Extension
+                    df_call['Ref'] = df_call['From'].fillna(df_call['Extension'])
+                    
+                    def get_stf(r):
+                        ex = str(r['Extension']).strip()
+                        return ex.split('-')[-1].strip() if '-' in ex else (ex if ex.lower() != 'nan' else "Unknown")
+                    
+                    df_call['Staff'] = df_call.apply(get_stf, axis=1)
+                    
+                    def to_s(t):
+                        try:
+                            h,m,s = map(int, str(t).split(':')); return h*3600+m*60+s
+                        except: return 0
+                    
+                    df_call['Sec'] = df_call['Duration'].apply(to_s)
+                    stat = df_call.groupby('Staff').agg({'Ref':'count', 'Sec':'sum'}).reset_index().sort_values('Ref', ascending=False)
+                    stat['Time'] = stat['Sec'].apply(lambda x: f"{int(x//3600):02d}:{int((x%3600)//60):02d}:{int(x%60):02d}")
 
-                # Vinh danh Top 5
-                st.subheader("🏆 Top 5 Chiến thần Telesale")
-                top_5 = stats.head(5)
-                cols = st.columns(5)
-                medals = ["🥇 Hạng 1", "🥈 Hạng 2", "🥉 Hạng 3", "🏅 Hạng 4", "🏅 Hạng 5"]
-                for i, (idx, row) in enumerate(top_5.iterrows()):
-                    with cols[i]:
-                        st.markdown(f"""<div class="call-card">
-                            <div style="color:#00D4FF;font-weight:bold;">{medals[i]}</div>
-                            <div style="color:white;font-weight:bold;margin:5px 0;">{row['Nhân viên']}</div>
-                            <div style="color:#00D4FF;font-size:1.6rem;font-weight:bold;">{row['Tổng cuộc gọi']}</div>
-                            <div style="color:#8B949E;font-size:0.7rem;">{row['Thời lượng']}</div>
-                        </div>""", unsafe_allow_html=True)
-                
-                st.markdown("---")
-                st.dataframe(stats[['Nhân viên', 'Tổng cuộc gọi', 'Thời lượng']], use_container_width=True)
-                st.bar_chart(stats.set_index('Nhân viên')['Tổng cuộc gọi'])
-        
-        elif f_call and not run_call:
-            st.warning("👈 Nhấn nút **'🚀 Chạy phân tích cuộc gọi'** ở thanh bên để xem kết quả.")
+                    # Vinh danh Top 5
+                    st.subheader("🏆 Top 5 Chiến thần Telesale")
+                    cols = st.columns(5)
+                    for i, (idx, row) in enumerate(stat.head(5).iterrows()):
+                        with cols[i]:
+                            st.markdown(f"""<div class="call-card"><div style="color:#00D4FF;">Hạng {i+1}</div>
+                                <div style="color:white;font-weight:bold;">{row['Staff']}</div>
+                                <div style="color:#00D4FF;font-size:1.5rem;font-weight:bold;">{row['Ref']}</div>
+                                <div style="color:#8B949E;font-size:0.7rem;">{row['Time']}</div></div>""", unsafe_allow_html=True)
+                    st.dataframe(stat[['Staff', 'Ref', 'Time']], use_container_width=True)
+                except Exception as e: st.error(f"Lỗi xử lý file Call Log: {e}")
 
 if __name__ == "__main__":
     main()
