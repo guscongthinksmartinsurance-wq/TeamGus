@@ -5,43 +5,47 @@ import re
 from datetime import datetime
 from io import BytesIO
 
-# --- 1. GIAO DIỆN DARK MODE & STYLE NỔI BẬT ---
+# --- 1. GIAO DIỆN DARK MODE & STYLE NÂNG CAO ---
 st.set_page_config(page_title="Team G Performance Center", layout="wide")
 st.markdown("""
     <style>
     .main { background-color: #0E1117; color: #FFFFFF; }
     [data-testid="stMetricValue"] { color: #00D4FF !important; font-weight: 900 !important; font-size: 2.5rem !important; }
     
-    /* STYLE CHO THẺ VINH DANH TOP 5 */
-    .award-card {
-        background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
-        border: 2px solid #ffd700; /* Viền vàng dày hơn */
-        border-radius: 15px;
-        padding: 20px;
+    /* Hiệu ứng thẻ Podium */
+    .podium-card {
+        background: linear-gradient(145deg, #1e293b, #0f172a);
+        border-radius: 20px;
+        padding: 25px;
         text-align: center;
-        box-shadow: 0 10px 20px rgba(255, 215, 0, 0.2); /* Đổ bóng vàng */
-        transition: transform 0.3s;
+        border: 1px solid #334155;
+        transition: all 0.3s ease;
     }
-    .award-card:hover { transform: scale(1.05); }
     
-    .rank-label { color: #ffd700; font-size: 0.9rem; font-weight: bold; text-transform: uppercase; letter-spacing: 1px; }
-    .staff-name { color: #FFFFFF !important; font-size: 1.4rem !important; font-weight: 800 !important; margin: 10px 0; display: block; }
-    .revenue-val { color: #ffd700; font-size: 1.6rem; font-weight: bold; }
-    .contract-val { color: #8B949E; font-size: 0.85rem; }
-    
-    /* Style cho thẻ Call Log */
-    .call-card {
-        background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
-        border: 2px solid #00D4FF;
-        border-radius: 15px;
-        padding: 20px;
-        text-align: center;
-        box-shadow: 0 10px 20px rgba(0, 212, 255, 0.2);
+    /* Làm nổi bật Hạng 1 */
+    .rank-1 {
+        border: 3px solid #ffd700 !important;
+        box-shadow: 0 0 30px rgba(255, 215, 0, 0.3);
+        transform: scale(1.05);
     }
+    
+    /* Tên nhân viên TRẮNG SÁNG & ĐẬM */
+    .staff-name-highlight {
+        color: #FFFFFF !important;
+        font-size: 1.6rem !important;
+        font-weight: 900 !important;
+        text-transform: uppercase;
+        margin: 10px 0;
+        display: block;
+        text-shadow: 2px 2px 8px rgba(0,0,0,0.8);
+    }
+    
+    .rev-gold { color: #ffd700; font-size: 1.8rem; font-weight: bold; }
+    .rev-blue { color: #00D4FF; font-size: 1.8rem; font-weight: bold; }
     </style>
     """, unsafe_allow_html=True)
 
-# --- 2. HÀM ĐỌC FILE (GIỮ NGUYÊN BẢN CHUẨN) ---
+# --- 2. HÀM ĐỌC FILE (GIỮ NGUYÊN) ---
 def smart_load(file):
     try:
         if file.name.endswith(('.xlsx', '.xls')):
@@ -58,7 +62,7 @@ def smart_load(file):
         return pd.read_excel(file, skiprows=header_row) if file.name.endswith(('.xlsx', '.xls')) else pd.read_csv(file, sep=None, engine='python', skiprows=header_row, encoding='utf-8', errors='ignore')
     except: return None
 
-# --- 3. MODULE CALL LOG (SỬA LỖI HIỂN THỊ) ---
+# --- 3. MODULE CALL LOG (NỔI BẬT) ---
 def process_call_log(file):
     try:
         for enc in ['utf-8-sig', 'latin1', 'cp1252']:
@@ -77,21 +81,27 @@ def process_call_log(file):
         stat = df_c.groupby('Staff')['Call_Ref'].count().sort_values(ascending=False).reset_index()
         stat.columns = ['Nhân viên', 'Tổng cuộc gọi']
         
-        st.subheader("📞 Top 5 Chiến thần Telesale")
-        c = st.columns(5)
-        for i, (idx, row) in enumerate(stat.head(5).iterrows()):
-            with c[i]:
-                st.markdown(f"""
-                    <div class='call-card'>
-                        <div style='color:#00D4FF; font-weight:bold;'>HẠNG {i+1}</div>
-                        <span class='staff-name'>{row['Nhân viên']}</span>
-                        <div style='color:#00D4FF; font-size:1.8rem; font-weight:bold;'>{row['Tổng cuộc gọi']}</div>
-                        <div style='color:#8B949E; font-size:0.8rem;'>Cuộc gọi</div>
-                    </div>
-                """, unsafe_allow_html=True)
+        st.subheader("📞 Chiến thần Telesale (Top 5)")
+        # Sắp xếp hiển thị 2-1-3-4-5
+        top_5 = stat.head(5).copy()
+        if len(top_5) >= 3:
+            order = [1, 0, 2, 3, 4]
+            cols = st.columns(5)
+            titles = ["🥈 HẠNG 2", "👑 HẠNG 1", "🥉 HẠNG 3", "🏅 HẠNG 4", "🏅 HẠNG 5"]
+            for i, idx in enumerate(order):
+                if idx < len(top_5):
+                    row = top_5.iloc[idx]
+                    is_top = (idx == 0)
+                    with cols[i]:
+                        st.markdown(f"""<div class="podium-card {'rank-1' if is_top else ''}">
+                            <div style="color:{'#ffd700' if is_top else '#00D4FF'};font-weight:bold;">{titles[idx]}</div>
+                            <span class="staff-name-highlight">{row['Nhân viên']}</span>
+                            <div class="rev-blue">{row['Tổng cuộc gọi']}</div>
+                            <div style="color:#8B949E;font-size:0.8rem;">CUỘC GỌI</div>
+                        </div>""", unsafe_allow_html=True)
         st.markdown("---")
         st.dataframe(stat, use_container_width=True)
-    except: st.error("Lỗi đọc file Call Log. Vui lòng kiểm tra lại định dạng file.")
+    except: st.error("Lỗi file Call Log.")
 
 # --- 4. ENGINE PHÂN TÍCH TEAM G ---
 def process_team_g(file, show_vinh_danh=False):
@@ -114,27 +124,32 @@ def process_team_g(file, show_vinh_danh=False):
     df['REV'] = df[m_c].apply(lambda v: float(re.sub(r'[^0-9.]', '', str(v))) if pd.notna(v) and re.sub(r'[^0-9.]', '', str(v)) != '' else 0.0)
 
     if show_vinh_danh:
-        st.title("🏆 Vinh danh Doanh số Team G")
+        st.title("🏆 Hall of Fame - Team G")
         lb = df.groupby(owner_c).agg({'REV':'sum', id_c:'nunique'}).sort_values('REV', ascending=False).reset_index()
         lb.columns = ['Thành viên', 'Doanh số', 'Hợp đồng']
         
+        # Podium Display 2-1-3-4-5
+        top_5 = lb.head(5).copy()
+        order = [1, 0, 2, 3, 4]
         cols_v = st.columns(5)
-        medals = ["🥇 HẠNG 1", "🥈 HẠNG 2", "🥉 HẠNG 3", "🏅 HẠNG 4", "🏅 HẠNG 5"]
-        for i, (idx, row) in enumerate(lb.head(5).iterrows()):
-            with cols_v[i]:
-                st.markdown(f"""
-                    <div class='award-card'>
-                        <div class='rank-label'>{medals[i]}</div>
-                        <span class='staff-name'>{row['Thành viên']}</span>
-                        <div class='revenue-val'>${row['Doanh số']:,.0f}</div>
-                        <div class='contract-val'>{row['Hợp đồng']} Hợp đồng</div>
-                    </div>
-                """, unsafe_allow_html=True)
+        titles = ["🥈 HẠNG 2", "👑 VÔ ĐỊCH", "🥉 HẠNG 3", "🏅 HẠNG 4", "🏅 HẠNG 5"]
+        
+        for i, idx in enumerate(order):
+            if idx < len(top_5):
+                row = top_5.iloc[idx]
+                is_top = (idx == 0)
+                with cols_v[i]:
+                    st.markdown(f"""<div class="podium-card {'rank-1' if is_top else ''}">
+                        <div style="color:{'#ffd700' if is_top else '#8B949E'};font-weight:bold;">{titles[idx]}</div>
+                        <span class="staff-name-highlight">{row['Thành viên']}</span>
+                        <div class="rev-gold">${row['Doanh số']:,.0f}</div>
+                        <div style="color:#00D4FF;font-weight:bold;">{row['Hợp đồng']} Hợp đồng</div>
+                    </div>""", unsafe_allow_html=True)
         st.markdown("---")
         st.dataframe(lb.style.format({'Doanh số': '{:,.0f}'}), use_container_width=True)
         return
 
-    # --- LOGIC COHORT GỐC CỦA BẠN ---
+    # --- LOGIC COHORT GỐC ---
     def assign_cohort(row):
         try:
             y, m = int(float(row[w_c])), int(float(row[v_c]))
