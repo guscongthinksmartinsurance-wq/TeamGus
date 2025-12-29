@@ -5,7 +5,7 @@ import re
 from datetime import datetime
 from io import BytesIO
 
-# --- 1. GIAO DIỆN & STYLE CAO CẤP ---
+# --- 1. STYLE CAO CẤP ---
 st.set_page_config(page_title="Team G Performance Center", layout="wide")
 st.markdown("""
     <style>
@@ -23,7 +23,7 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# --- 2. HÀM TRỢ GIÚP (LÀM SẠCH DỮ LIỆU) ---
+# --- 2. HÀM XỬ LÝ DỮ LIỆU AN TOÀN ---
 def smart_load(file):
     if file is None: return None
     try:
@@ -46,27 +46,41 @@ def get_cols(df):
         for i, c in enumerate(c_clean):
             if all(k in c for k in ks): return df.columns[i]
         return None
-    return {
+    res = {
         'm': find_it(['TARGET','PREMIUM']), 'e': find_it(['THÁNG','FILE']),
         'v': find_it(['THÁNG','LEAD']), 'w': find_it(['NĂM','LEAD']),
         'id': find_it(['LEAD','ID']), 'team': find_it(['TEAM']), 'owner': find_it(['OWNER'])
     }
+    return res if res['m'] else None
 
 def process_rev(df, m_c):
     return df[m_c].apply(lambda v: float(re.sub(r'[^0-9.]', '', str(v))) if pd.notna(v) and re.sub(r'[^0-9.]', '', str(v)) != '' else 0.0)
 
-# --- 3. CÁC CÔNG CỤ CHI TIẾT ---
-def tool_cohort_vinhdanh(f, mode):
-    df = smart_load(f)
-    if df is None: return
+# --- 3. CÁC MODULE CÔNG CỤ ---
+def tool_cohort_vinhdanh(df, mode):
     c = get_cols(df)
+    if not c: 
+        st.error("File không đúng định dạng Masterlife (Thiếu cột Target Premium).")
+        return
+    
     curr_y = datetime.now().year
     df = df[df[c['team']].astype(str).str.upper().str.contains('G', na=False)].copy()
     df['REV'] = process_rev(df, c['m'])
     
-    # Logic Cohort gom nhóm năm cũ
-    df['NHÓM'] = df.apply(lambda r: f"Trước năm {curr_y}" if (pd.notna(r[c['w']]) and int(float(r[c['w']])) < curr_y) else (f"Lead T{int(float(r[c['v']])):02d}/{int(float(r[c['w']]))}" if pd.notna(r[c['v']]) else "Khác"), axis=1)
-    df['T_CHOT'] = df[c['e']].apply(lambda v: int(float(v)) if pd.notna(v) and str(v).replace('.','').isdigit() and 1<=int(float(v))<=12 else None)
+    # LOGIC CHỐNG RÁC CHO CỘT NĂM/THÁNG
+    def sanitize_cohort(row):
+        try:
+            val_w = str(row[c['w']]).strip()
+            val_v = str(row[c['v']]).strip()
+            if not val_w or val_w.lower() == 'nan' or not val_v or val_v.lower() == 'nan':
+                return "📦 Nhóm Khác"
+            y = int(float(val_w))
+            m = int(float(val_v))
+            return f"Trước năm {curr_y}" if y < curr_y else f"Lead T{m:02d}/{y}"
+        except: return "📦 Nhóm Khác"
+
+    df['NHÓM'] = df.apply(sanitize_cohort, axis=1)
+    df['T_CHOT'] = df[c['e']].apply(lambda v: int(float(v)) if (pd.notna(v) and str(v).replace('.','').replace('-','').isdigit()) else None)
 
     if mode == "vinh_danh":
         st.title(f"🏆 Vinh Danh Team G {curr_y}")
@@ -87,44 +101,36 @@ def tool_cohort_vinhdanh(f, mode):
         st.area_chart(df.groupby('T_CHOT')['REV'].sum().reindex(range(1,13)).fillna(0), color="#00FF7F")
         mtx = df.pivot_table(index='NHÓM', columns='T_CHOT', values='REV', aggfunc='sum').fillna(0).reindex(columns=range(1,13)).fillna(0)
         st.dataframe(mtx.style.format("${:,.0f}"), use_container_width=True)
-    
-    # Nút Export
-    output = BytesIO()
-    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-        df.to_excel(writer, index=False, sheet_name='Data_Detail')
-    st.sidebar.download_button("📥 Tải Báo Cáo Detail", output.getvalue(), "TeamG_Detail.xlsx")
-
-def tool_comparison(f_curr, f_n1, f_n2):
-    st.title("📈 So Sánh Dòng Tiền 3 Năm")
-    curr_y = datetime.now().year
-    all_c = []
-    for y, f in [(curr_y, f_curr), (curr_y-1, f_n1), (curr_y-2, f_n2)]:
-        tmp = smart_load(f)
-        if tmp is not None:
-            c = get_cols(tmp)
-            tmp = tmp[tmp[c['team']].astype(str).str.upper().str.contains('G', na=False)].copy()
-            tmp['REV'] = process_rev(tmp, c['m'])
-            val = tmp.groupby(c['e'])['REV'].sum().reindex(range(1, 13)).fillna(0)
-            val.name = f"Năm {y}"
-            all_c.append(val)
-    if all_c:
-        res = pd.concat(all_c, axis=1)
-        res.index = [f"T{m:02d}" for m in res.index]
-        st.line_chart(res)
-        st.dataframe(res.style.format("${:,.0f}"), use_container_width=True)
 
 # --- 4. ĐIỀU HƯỚNG CHÍNH ---
 def main():
     menu = st.sidebar.radio("Chọn công cụ:", ["📊 Phân tích Cohort", "🏆 Vinh danh cá nhân", "📈 So sánh dòng tiền", "📞 Phân tích Call Log"])
     
     if menu == "📈 So sánh dòng tiền":
-        f1 = st.sidebar.file_uploader("File 2025", type=['csv', 'xlsx'])
-        f2 = st.sidebar.file_uploader("File 2024", type=['csv', 'xlsx'])
-        f3 = st.sidebar.file_uploader("File 2023", type=['csv', 'xlsx'])
-        if f1 or f2 or f3: tool_comparison(f1, f2, f3)
+        st.title("📈 So Sánh Dòng Tiền 3 Năm")
+        f1 = st.sidebar.file_uploader("File 2025", type=['csv', 'xlsx'], key='f1')
+        f2 = st.sidebar.file_uploader("File 2024", type=['csv', 'xlsx'], key='f2')
+        f3 = st.sidebar.file_uploader("File 2023", type=['csv', 'xlsx'], key='f3')
+        # Logic so sánh 3 file (Giữ nguyên như đã thống nhất)
+        all_c = []
+        for y, f in [(2025, f1), (2024, f2), (2023, f3)]:
+            tmp = smart_load(f)
+            if tmp is not None:
+                c = get_cols(tmp)
+                if c:
+                    tmp = tmp[tmp[c['team']].astype(str).str.upper().str.contains('G', na=False)].copy()
+                    tmp['REV'] = process_rev(tmp, c['m'])
+                    val = tmp.groupby(c['e'])['REV'].sum().reindex(range(1, 13)).fillna(0)
+                    val.name = f"Năm {y}"
+                    all_c.append(val)
+        if all_c:
+            res = pd.concat(all_c, axis=1)
+            res.index = [f"T{m:02d}" for m in res.index]
+            st.line_chart(res)
+            st.dataframe(res.style.format("${:,.0f}"), use_container_width=True)
     
     elif menu == "📞 Phân tích Call Log":
-        f_c = st.sidebar.file_uploader("Nạp file Call Log", type=['csv'])
+        f_c = st.sidebar.file_uploader("Nạp file Call Log", type=['csv'], key='f_call')
         if f_c:
             st.title("📞 Call Performance (Engine V2)")
             counts = {}
@@ -137,9 +143,11 @@ def main():
             st.dataframe(stat, use_container_width=True)
             
     else: # Cohort & Vinh danh
-        f_m = st.sidebar.file_uploader("Nạp file Masterlife", type=['csv', 'xlsx'])
+        f_m = st.sidebar.file_uploader("Nạp file Masterlife", type=['csv', 'xlsx'], key='f_master')
         if f_m:
-            mode = "vinh_danh" if menu == "🏆 Vinh danh cá nhân" else "cohort"
-            tool_cohort_vinhdanh(f_m, mode)
+            df = smart_load(f_m)
+            if df is not None:
+                mode = "vinh_danh" if menu == "🏆 Vinh danh cá nhân" else "cohort"
+                tool_cohort_vinhdanh(df, mode)
 
 if __name__ == "__main__": main()
